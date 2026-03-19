@@ -447,6 +447,17 @@ app.get(
       channelWallets.set(channelId, wallet);
       channelHistory.push({ wallet, channelId, openedAt: new Date().toISOString() });
       console.log(`Session opened: ${shortAddr(wallet)} → ${channelId.slice(0, 10)}...`);
+
+      // Push state update to CLI
+      for (const room of rooms.values()) {
+        const player = room.players.find((p) => p.wallet === wallet);
+        if (player) {
+          player.channelId = channelId;
+          player.sessionReady = true;
+          await broadcastState(room);
+          break;
+        }
+      }
     }
 
     return c.json({ success: true, channelId, wallet });
@@ -464,6 +475,21 @@ app.get(
   },
   async (c) => {
     const round = Number(c.req.query("round") ?? 1);
+
+    // Push updated balance to CLI
+    try {
+      const credential = Credential.fromRequest(c.req.raw);
+      const wallet = credential.source ? extractWallet(credential.source) : null;
+      if (wallet) {
+        for (const room of rooms.values()) {
+          if (room.players.some((p) => p.wallet === wallet)) {
+            await broadcastState(room);
+            break;
+          }
+        }
+      }
+    } catch {}
+
     return c.json({ success: true, round, paid: roundCostDollars(round) });
   }
 );
@@ -639,7 +665,7 @@ wss.on("connection", (ws) => {
   let myWallet: string | null = null;
   let myRoom: Room | null = null;
 
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
     let msg: any;
     try {
       msg = JSON.parse(raw.toString());
@@ -699,7 +725,7 @@ wss.on("connection", (ws) => {
         myRoom = room;
 
         ws.send(JSON.stringify({ type: "room_created", roomId: id }));
-        broadcastState(room);
+        await broadcastState(room);
         break;
       }
 
@@ -733,7 +759,7 @@ wss.on("connection", (ws) => {
         }
         myWallet = wallet;
         myRoom = room;
-        broadcastState(room);
+        await broadcastState(room);
         break;
       }
 
@@ -748,7 +774,7 @@ wss.on("connection", (ws) => {
           channelWallets.set(channelId, myWallet);
         }
         player.sessionReady = true;
-        broadcastState(myRoom);
+        await broadcastState(myRoom);
         break;
       }
 
@@ -786,7 +812,7 @@ wss.on("connection", (ws) => {
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.choice !== null) return;
         me.choice = "stay";
-        broadcastState(myRoom);
+        await broadcastState(myRoom);
         checkAllChosen(myRoom);
         break;
       }
@@ -797,14 +823,14 @@ wss.on("connection", (ws) => {
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.choice !== null) return;
         me.choice = "fold";
-        broadcastState(myRoom);
+        await broadcastState(myRoom);
         checkAllChosen(myRoom);
         break;
       }
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", async () => {
     if (!myRoom || !myWallet) return;
     const me = myRoom.players.find((p) => p.wallet === myWallet);
     if (!me) return;
@@ -812,7 +838,7 @@ wss.on("connection", (ws) => {
     if (myRoom.state === "playing" && me.alive) {
       me.choice = "fold";
       me.alive = false;
-      broadcastState(myRoom);
+      await broadcastState(myRoom);
       checkAllChosen(myRoom);
     } else if (myRoom.state === "lobby") {
       myRoom.players = myRoom.players.filter((p) => p.wallet !== myWallet);
@@ -820,7 +846,7 @@ wss.on("connection", (ws) => {
         rooms.delete(myRoom.id);
       } else {
         if (myRoom.host === myWallet) myRoom.host = myRoom.players[0]!.wallet;
-        broadcastState(myRoom);
+        await broadcastState(myRoom);
       }
     }
   });
