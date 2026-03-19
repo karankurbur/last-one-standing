@@ -173,7 +173,8 @@ function renderLobby(state: any) {
     const nameStr = isMe ? `${c.cyan}${p.name} (you)${c.reset}` : p.name;
     const hostBadge = isHost ? ` ${c.yellow}[HOST]${c.reset}` : "";
     const ready = p.sessionReady ? `${c.green}✓${c.reset}` : `${c.dim}…${c.reset}`;
-    lines.push(`    ${ready} ${nameStr}${hostBadge}`);
+    const hearts = p.lives !== undefined ? ` ${"❤️".repeat(p.lives)}${"🖤".repeat(Math.max(0, (state.maxLives ?? 3) - (p.lives ?? 0)))}` : "";
+    lines.push(`    ${ready} ${nameStr}${hostBadge}${hearts}`);
   }
 
   lines.push("");
@@ -233,13 +234,16 @@ function renderRound(roundMsg: any) {
       const isMe = p.wallet === wallet;
       const alive = p.alive;
       const hasBid = p.hasBid;
+      const lives = p.lives ?? 0;
+      const maxL = state.maxLives ?? 3;
+      const hearts = "❤️".repeat(lives) + "🖤".repeat(Math.max(0, maxL - lives));
       const status = !alive
-        ? `${c.red}✗ eliminated${c.reset}`
+        ? `${c.red}✗ out${c.reset}`
         : hasBid
           ? `${c.green}✓ bid locked${c.reset}`
           : `${c.dim}bidding...${c.reset}`;
       const nameStr = isMe ? `${c.cyan}${p.name}${c.reset}` : p.name;
-      lines.push(`    ${alive ? c.green + "●" : c.red + "●"}${c.reset} ${nameStr}  ${status}`);
+      lines.push(`    ${alive ? c.green + "●" : c.red + "●"}${c.reset} ${nameStr} ${hearts}  ${status}`);
     }
   }
 
@@ -282,18 +286,28 @@ function renderRoundResult(msg: any) {
   print(`${c.dim}─────────────────────────────────────────────${c.reset}`);
   print(`  ${c.bold}Round ${msg.round} Results:${c.reset}`);
 
+  const maxL = msg.maxLives ?? 3;
   if (msg.bids && msg.bids.length > 0) {
     for (const b of msg.bids) {
-      const isEliminated = msg.eliminated?.includes(b.name);
-      const marker = isEliminated ? `${c.red}✗${c.reset}` : `${c.green}✓${c.reset}`;
-      print(`    ${marker} ${b.name}: $${b.bidDollars}`);
+      const isElim = msg.eliminated?.some((e: any) => e.name === b.name);
+      const marker = isElim ? `${c.red}✗${c.reset}` : `${c.green}✓${c.reset}`;
+      const hearts = "❤️".repeat(b.lives ?? 0) + "🖤".repeat(Math.max(0, maxL - (b.lives ?? 0)));
+      print(`    ${marker} ${b.name}: $${b.bidDollars}  ${hearts}`);
     }
   }
   if (msg.eliminated && msg.eliminated.length > 0) {
-    print(`    ${c.red}Eliminated (lowest bid):${c.reset} ${msg.eliminated.join(", ")}`);
+    const names = msg.eliminated.map((e: any) => {
+      const dead = e.lives <= 0;
+      return dead ? `${c.red}${e.name} [OUT]${c.reset}` : `${c.yellow}${e.name} (-1 life)${c.reset}`;
+    });
+    print(`    ${c.red}Lowest bid:${c.reset} ${names.join(", ")}`);
   }
   if (msg.folders && msg.folders.length > 0) {
-    print(`    ${c.red}Folded:${c.reset} ${msg.folders.join(", ")}`);
+    const names = msg.folders.map((f: any) => {
+      const dead = f.lives <= 0;
+      return dead ? `${c.red}${f.name} [OUT]${c.reset}` : `${c.yellow}${f.name} (-1 life)${c.reset}`;
+    });
+    print(`    ${c.red}Folded:${c.reset} ${names.join(", ")}`);
   }
   print(`    ${c.yellow}Pot: $${msg.potDollars}${c.reset}`);
   print("");
