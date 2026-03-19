@@ -155,11 +155,8 @@ function renderLobby(state: any) {
   } else {
     lines.push(`  ${c.red}✗ No session${c.reset}`);
     lines.push("");
-    lines.push(`  ${c.dim}Run in another terminal to deposit (default $0.10):${c.reset}`);
+    lines.push(`  ${c.dim}Run in another terminal to deposit ($1.00):${c.reset}`);
     lines.push(`  ${c.green}tempo request "${SERVER}/api/session/open"${c.reset}`);
-    lines.push("");
-    lines.push(`  ${c.dim}Or specify deposit amount:${c.reset}`);
-    lines.push(`  ${c.green}tempo request "${SERVER}/api/session/open?deposit=1.00"${c.reset}`);
     lines.push("");
     lines.push(`  ${c.dim}Game will detect your deposit automatically.${c.reset}`);
   }

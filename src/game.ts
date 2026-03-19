@@ -21,7 +21,7 @@ const DECIMALS = 6;
 const DEV_MODE = process.argv.includes("--dev");
 const MIN_PLAYERS = DEV_MODE ? 1 : 2;
 const DEV_MAX_ROUNDS = 3;
-const SUGGESTED_DEPOSIT = "0.10"; // suggest $0.10 deposit for session
+const SUGGESTED_DEPOSIT = "1.00"; // suggest $1.00 deposit for session
 const SHOW_BIDS = process.argv.includes("--show-bids"); // show bid amounts during round (default: hidden)
 const MAX_LIVES = Number(process.env.MAX_LIVES ?? 3);
 
