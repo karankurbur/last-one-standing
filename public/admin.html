@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - Last One Standing</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.8rem;
+      text-align: center;
+      margin-bottom: 0.25rem;
+      color: #fff;
+      letter-spacing: 0.1em;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 2rem;
+      font-size: 0.8rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .card-title {
+      font-size: 0.7rem;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 600;
+    }
+    .badge {
+      font-size: 0.65rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+    .badge-green { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge-yellow { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .badge-red { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .badge-gray { background: rgba(150,150,150,0.15); color: #888; }
+
+    /* Balances table */
+    .balance-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .balance-table th {
+      text-align: left;
+      font-size: 0.65rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid #222;
+    }
+    .balance-table td {
+      padding: 0.5rem;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .balance-table tr:hover td {
+      background: #1a1a1a;
+    }
+    .balance-amount {
+      color: #4ade80;
+      font-weight: 600;
+    }
+    .balance-cents {
+      color: #555;
+      font-size: 0.75rem;
+    }
+    .empty-state {
+      color: #444;
+      font-style: italic;
+      text-align: center;
+      padding: 2rem 1rem;
+      font-size: 0.85rem;
+    }
+
+    /* Room cards */
+    .room-item {
+      background: #1a1a1a;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 0.85rem;
+      margin-bottom: 0.5rem;
+    }
+    .room-item:last-child { margin-bottom: 0; }
+    .room-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .room-id {
+      font-weight: 700;
+      color: #4ade80;
+      letter-spacing: 0.15em;
+      font-size: 1rem;
+    }
+    .room-meta {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.75rem;
+      color: #666;
+    }
+    .room-meta span { display: flex; align-items: center; gap: 0.3rem; }
+    .room-meta .value { color: #ccc; font-weight: 600; }
+    .room-players-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.5rem;
+    }
+    .player-chip {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: #1a2e1a;
+      color: #4ade80;
+    }
+    .player-chip.dead {
+      background: #2e1a1a;
+      color: #ef4444;
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    .player-chip.host::after {
+      content: 'H';
+      margin-left: 0.3rem;
+      font-weight: 700;
+      font-size: 0.6rem;
+      opacity: 0.6;
+    }
+
+    /* Grant form */
+    .form-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .form-group {
+      flex: 1;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.65rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.35rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    input:focus { border-color: #4ade80; }
+    input::placeholder { color: #444; }
+    .btn {
+      padding: 0.6rem 1.25rem;
+      border: none;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-green { background: #4ade80; color: #000; }
+    .btn-green:hover { background: #22c55e; }
+    .grant-result {
+      font-size: 0.8rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      margin-top: 0.5rem;
+      display: none;
+    }
+    .grant-result.success {
+      display: block;
+      background: rgba(74,222,128,0.1);
+      color: #4ade80;
+      border: 1px solid rgba(74,222,128,0.2);
+    }
+    .grant-result.error {
+      display: block;
+      background: rgba(239,68,68,0.1);
+      color: #ef4444;
+      border: 1px solid rgba(239,68,68,0.2);
+    }
+
+    /* Event log */
+    .event-log {
+      height: 350px;
+      overflow-y: auto;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      scrollbar-width: thin;
+      scrollbar-color: #333 transparent;
+    }
+    .event-log::-webkit-scrollbar { width: 4px; }
+    .event-log::-webkit-scrollbar-track { background: transparent; }
+    .event-log::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+    .log-entry {
+      padding: 0.25rem 0;
+      border-bottom: 1px solid #1a1a1a;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .log-time {
+      color: #444;
+      flex-shrink: 0;
+    }
+    .log-type {
+      font-weight: 600;
+      flex-shrink: 0;
+      min-width: 100px;
+    }
+    .log-type.room_state { color: #3b82f6; }
+    .log-type.round_start { color: #fbbf24; }
+    .log-type.round_result { color: #f97316; }
+    .log-type.game_over { color: #ef4444; }
+    .log-type.room_created { color: #4ade80; }
+    .log-type.error { color: #ef4444; }
+    .log-type.connected { color: #4ade80; }
+    .log-type.disconnected { color: #ef4444; }
+    .log-detail { color: #888; }
+
+    .ws-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.7rem;
+    }
+    .ws-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+    .ws-dot.connected { background: #4ade80; }
+
+    .full-width { grid-column: 1 / -1; }
+
+    .stats-row {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      flex: 1;
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .stat-value.green { color: #4ade80; }
+    .stat-value.yellow { color: #fbbf24; }
+    .stat-label {
+      font-size: 0.65rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 0.25rem;
+    }
+
+    .scroll-area {
+      max-height: 350px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #333 transparent;
+    }
+    .scroll-area::-webkit-scrollbar { width: 4px; }
+    .scroll-area::-webkit-scrollbar-track { background: transparent; }
+    .scroll-area::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    .back-link {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+    }
+    .back-link a {
+      color: #555;
+      text-decoration: none;
+    }
+    .back-link a:hover { color: #888; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ADMIN PANEL</h1>
+    <p class="subtitle">Last One Standing -- Live Dashboard</p>
+
+    <!-- Stats row -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-players">0</div>
+        <div class="stat-label">Players</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-rooms">0</div>
+        <div class="stat-label">Active Rooms</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value green" id="stat-total-balance">$0.00</div>
+        <div class="stat-label">Total Credits</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value yellow" id="stat-total-pot">$0.00</div>
+        <div class="stat-label">In Pots</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Player Balances -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Player Balances</span>
+          <span class="badge badge-green" id="balance-count">0 players</span>
+        </div>
+        <div class="scroll-area">
+          <table class="balance-table" id="balance-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th style="text-align:right;">Balance</th>
+              </tr>
+            </thead>
+            <tbody id="balance-body">
+            </tbody>
+          </table>
+          <div class="empty-state" id="balance-empty">No players yet</div>
+        </div>
+      </div>
+
+      <!-- Grant Credits -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Grant Credits</span>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Player Name</label>
+            <input type="text" id="grant-player" placeholder="e.g. alice">
+          </div>
+          <div class="form-group">
+            <label>Amount (cents)</label>
+            <input type="number" id="grant-amount" placeholder="100" value="100" min="1">
+          </div>
+        </div>
+        <button class="btn btn-green" id="grant-btn" onclick="grantCredits()" style="width:100%;">Grant Credits</button>
+        <div class="grant-result" id="grant-result"></div>
+
+        <div style="margin-top:1.5rem;">
+          <div class="card-header" style="margin-bottom:0.75rem;">
+            <span class="card-title">Quick Grant</span>
+          </div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;" id="quick-grant-buttons">
+            <span class="empty-state" style="padding:0.5rem;font-size:0.75rem;">Load players to see quick-grant buttons</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Rooms -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Active Rooms</span>
+          <span class="badge badge-yellow" id="room-count">0 rooms</span>
+        </div>
+        <div class="scroll-area" id="rooms-container">
+          <div class="empty-state" id="rooms-empty">No active rooms</div>
+        </div>
+      </div>
+
+      <!-- Event Log -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Live Event Log</span>
+          <div class="ws-status">
+            <div class="ws-dot" id="ws-dot"></div>
+            <span id="ws-label">Disconnected</span>
+          </div>
+        </div>
+        <div class="event-log" id="event-log">
+          <div class="empty-state">Connecting to WebSocket...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="back-link">
+      <a href="/">Back to game</a>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // --- Data fetching ---
+    let knownPlayers = [];
+
+    async function fetchBalances() {
+      try {
+        const res = await fetch('/api/admin/balances');
+        const data = await res.json();
+        renderBalances(data.balances);
+      } catch (e) {
+        console.error('Failed to fetch balances:', e);
+      }
+    }
+
+    async function fetchRooms() {
+      try {
+        const res = await fetch('/api/rooms');
+        const data = await res.json();
+        renderRooms(data.rooms);
+      } catch (e) {
+        console.error('Failed to fetch rooms:', e);
+      }
+    }
+
+    function renderBalances(balances) {
+      const entries = Object.entries(balances).sort((a, b) => b[1] - a[1]);
+      const body = $('balance-body');
+      const empty = $('balance-empty');
+
+      knownPlayers = entries.map(([name]) => name);
+
+      if (entries.length === 0) {
+        body.innerHTML = '';
+        empty.style.display = 'block';
+        $('balance-count').textContent = '0 players';
+        $('stat-players').textContent = '0';
+        $('stat-total-balance').textContent = '$0.00';
+        renderQuickGrant();
+        return;
+      }
+
+      empty.style.display = 'none';
+      $('balance-count').textContent = `${entries.length} player${entries.length !== 1 ? 's' : ''}`;
+      $('stat-players').textContent = entries.length;
+
+      let totalCents = 0;
+      let html = '';
+      for (const [name, cents] of entries) {
+        totalCents += cents;
+        const dollars = (cents / 100).toFixed(2);
+        html += `<tr>
+          <td>${esc(name)}</td>
+          <td style="text-align:right;">
+            <span class="balance-amount">$${dollars}</span>
+            <span class="balance-cents">(${cents}c)</span>
+          </td>
+        </tr>`;
+      }
+      body.innerHTML = html;
+      $('stat-total-balance').textContent = '$' + (totalCents / 100).toFixed(2);
+
+      renderQuickGrant();
+    }
+
+    function renderQuickGrant() {
+      const container = $('quick-grant-buttons');
+      if (knownPlayers.length === 0) {
+        container.innerHTML = '<span class="empty-state" style="padding:0.5rem;font-size:0.75rem;">No players yet</span>';
+        return;
+      }
+      container.innerHTML = knownPlayers.map(name =>
+        `<button class="btn btn-green" style="font-size:0.7rem;padding:0.35rem 0.6rem;" onclick="quickGrant('${esc(name)}')">${esc(name)} +$1</button>`
+      ).join('');
+    }
+
+    function renderRooms(rooms) {
+      const container = $('rooms-container');
+      const empty = $('rooms-empty');
+
+      $('room-count').textContent = `${rooms.length} room${rooms.length !== 1 ? 's' : ''}`;
+      $('stat-rooms').textContent = rooms.length;
+
+      let totalPot = 0;
+      for (const r of rooms) totalPot += r.pot;
+      $('stat-total-pot').textContent = '$' + (totalPot / 100).toFixed(2);
+
+      if (rooms.length === 0) {
+        container.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+
+      empty.style.display = 'none';
+
+      container.innerHTML = rooms.map(r => {
+        const stateBadgeClass = r.state === 'playing' ? 'badge-yellow' : r.state === 'lobby' ? 'badge-green' : 'badge-gray';
+        const playersHtml = r.players.map(p => {
+          let cls = 'player-chip';
+          if (!p.alive) cls += ' dead';
+          if (p.name === r.host) cls += ' host';
+          return `<span class="${cls}">${esc(p.name)}</span>`;
+        }).join('');
+
+        return `<div class="room-item">
+          <div class="room-header">
+            <span class="room-id">${esc(r.id)}</span>
+            <span class="badge ${stateBadgeClass}">${r.state}</span>
+          </div>
+          <div class="room-meta">
+            <span>Players: <span class="value">${r.playerCount}</span></span>
+            <span>Pot: <span class="value">$${r.potDollars}</span></span>
+            <span>Round: <span class="value">${r.round}</span></span>
+          </div>
+          <div class="room-players-list">${playersHtml}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // --- Grant ---
+    async function grantCredits() {
+      const player = $('grant-player').value.trim();
+      const amount = parseInt($('grant-amount').value, 10);
+      const result = $('grant-result');
+
+      if (!player) {
+        result.className = 'grant-result error';
+        result.textContent = 'Player name is required';
+        return;
+      }
+      if (!amount || amount < 1) {
+        result.className = 'grant-result error';
+        result.textContent = 'Amount must be at least 1 cent';
+        return;
+      }
+
+      $('grant-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/admin/grant?player=${encodeURIComponent(player)}&amount=${amount}`);
+        const data = await res.json();
+        if (data.error) {
+          result.className = 'grant-result error';
+          result.textContent = data.error;
+        } else {
+          result.className = 'grant-result success';
+          result.textContent = `Granted ${amount}c to ${data.player}. New balance: $${data.balanceDollars} (${data.balance}c)`;
+          $('grant-player').value = '';
+          fetchBalances();
+        }
+      } catch (e) {
+        result.className = 'grant-result error';
+        result.textContent = 'Request failed: ' + e.message;
+      }
+      $('grant-btn').disabled = false;
+
+      setTimeout(() => { result.style.display = 'none'; result.className = 'grant-result'; }, 5000);
+    }
+
+    async function quickGrant(name) {
+      $('grant-player').value = name;
+      $('grant-amount').value = '100';
+      await grantCredits();
+    }
+
+    $('grant-player').addEventListener('keydown', (e) => { if (e.key === 'Enter') grantCredits(); });
+    $('grant-amount').addEventListener('keydown', (e) => { if (e.key === 'Enter') grantCredits(); });
+
+    // --- WebSocket Event Log ---
+    let ws = null;
+    const MAX_LOG_ENTRIES = 200;
+
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}`);
+
+      ws.onopen = () => {
+        $('ws-dot').classList.add('connected');
+        $('ws-label').textContent = 'Connected';
+        addLogEntry('connected', 'WebSocket connected');
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          handleWSMessage(msg);
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        $('ws-dot').classList.remove('connected');
+        $('ws-label').textContent = 'Disconnected';
+        addLogEntry('disconnected', 'WebSocket disconnected, reconnecting...');
+        setTimeout(connectWS, 3000);
+      };
+
+      ws.onerror = () => {
+        // onclose will fire after this
+      };
+    }
+
+    function handleWSMessage(msg) {
+      let detail = '';
+      switch (msg.type) {
+        case 'room_state':
+          detail = `Room ${msg.roomId} | ${msg.state} | ${msg.players?.length || 0} players | Pot: $${msg.potDollars} | Round ${msg.round}`;
+          break;
+        case 'round_start':
+          detail = `Round ${msg.round} | Cost: $${msg.costDollars} | ${msg.alivePlayers?.length || 0} alive: ${msg.alivePlayers?.join(', ')}`;
+          break;
+        case 'round_result':
+          detail = `Round ${msg.round} | Stayers: ${msg.stayers?.join(', ') || 'none'} | Folders: ${msg.folders?.join(', ') || 'none'} | Pot: $${msg.potDollars}`;
+          break;
+        case 'game_over':
+          detail = msg.message || `Winner: ${msg.winner || 'draw'} | Pot: $${msg.potDollars}`;
+          break;
+        case 'room_created':
+          detail = `Room ${msg.roomId} created`;
+          break;
+        case 'error':
+          detail = msg.message || 'Unknown error';
+          break;
+        default:
+          detail = JSON.stringify(msg).substring(0, 120);
+      }
+      addLogEntry(msg.type, detail);
+
+      // Refresh data on game events
+      if (['room_state', 'round_result', 'game_over'].includes(msg.type)) {
+        fetchBalances();
+        fetchRooms();
+      }
+    }
+
+    function addLogEntry(type, detail) {
+      const log = $('event-log');
+      // Clear the initial empty state if present
+      const empty = log.querySelector('.empty-state');
+      if (empty) empty.remove();
+
+      const now = new Date();
+      const time = now.toLocaleTimeString('en-US', { hour12: false });
+
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="log-type ${type}">${type}</span>
+        <span class="log-detail">${esc(detail)}</span>
+      `;
+
+      log.appendChild(entry);
+
+      // Trim old entries
+      while (log.children.length > MAX_LOG_ENTRIES) {
+        log.removeChild(log.firstChild);
+      }
+
+      // Auto-scroll to bottom
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // --- Utils ---
+    function esc(s) {
+      if (!s) return '';
+      const d = document.createElement('div');
+      d.textContent = String(s);
+      return d.innerHTML;
+    }
+
+    // --- Init ---
+    fetchBalances();
+    fetchRooms();
+    connectWS();
+
+    // Auto-refresh every 3 seconds
+    setInterval(() => {
+      fetchBalances();
+      fetchRooms();
+    }, 3000);
+  </script>
+</body>
+</html>

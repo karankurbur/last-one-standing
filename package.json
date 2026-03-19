@@ -1,0 +1,23 @@
+{
+  "name": "last-one-standing",
+  "version": "1.0.0",
+  "description": "Escalating stakes game with real micropayments. Last player standing wins the pot.",
+  "scripts": {
+    "dev": "npx tsx --env-file=.env --watch src/game.ts",
+    "game": "npx tsx --env-file=.env src/game.ts",
+    "play": "npx tsx src/play.ts"
+  },
+  "keywords": ["game", "crypto", "micropayments", "tempo", "cli"],
+  "license": "ISC",
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "@types/ws": "^8.18.1",
+    "hono": "^4.12.8",
+    "mppx": "^0.4.7",
+    "ox": "^0.14.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "viem": "^2.47.5",
+    "ws": "^8.19.0"
+  }
+}
