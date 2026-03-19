@@ -6,6 +6,9 @@
     "dev": "npx tsx --env-file=.env --watch src/game.ts -- --dev",
     "game": "npx tsx --env-file=.env src/game.ts",
     "play": "npx tsx src/play.ts",
+    "snake": "npx tsx --env-file=.env src/snake.ts",
+    "snake:dev": "npx tsx --env-file=.env --watch src/snake.ts -- --dev",
+    "snake:play": "npx tsx src/snake-play.ts",
     "reset": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_http___localhost_3000.lock && echo 'State reset.'",
     "withdraw-all": "npx tsx --env-file=.env src/withdraw-all.ts"
   },
