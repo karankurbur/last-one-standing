@@ -313,6 +313,7 @@ function resolveRound(room: Room) {
 
   // More than 2 alive → wait for admin to start next round
   room.round++;
+  (room as any).waitingForAdmin = true;
   broadcast(room, {
     type: "waiting_for_admin",
     round: room.round,
@@ -611,7 +612,7 @@ async function settleGame(room: Room, winner: Player | null) {
     });
   }
 
-  // Note: we do NOT clear walletChannels/channelWallets — channels stay open for reuse
+  // Channels cleaned up above — players must open new session for next game
 }
 
 // --- HTTP ---
@@ -938,7 +939,7 @@ wss.on("connection", (ws) => {
           myWallet = wallet;
           myRoom = existingLobby;
           ws.send(JSON.stringify({ type: "room_created", roomId: existingLobby.id }));
-          broadcastState(existingLobby);
+          await broadcastState(existingLobby);
           break;
         }
 
@@ -1051,7 +1052,8 @@ wss.on("connection", (ws) => {
           ws.send(JSON.stringify({ type: "error", message: "Only the admin can advance rounds" }));
           return;
         }
-        if (myRoom.state !== "playing") return;
+        if (myRoom.state !== "playing" || !(myRoom as any).waitingForAdmin) return;
+        (myRoom as any).waitingForAdmin = false;
         startRound(myRoom);
         break;
       }
@@ -1073,7 +1075,7 @@ wss.on("connection", (ws) => {
 
       case "bid_intent": {
         // Pre-validate bid BEFORE payment. Client pays only after approval.
-        if (!myRoom || !myWallet || myRoom.state !== "playing") return;
+        if (!myRoom || !myWallet || myRoom.state !== "playing" || (myRoom as any).waitingForAdmin) return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.bid !== null) {
           ws.send(JSON.stringify({ type: "bid_rejected", reason: "Cannot bid right now" }));
@@ -1109,7 +1111,7 @@ wss.on("connection", (ws) => {
       }
 
       case "bid_confirmed": {
-        if (!myRoom || !myWallet || myRoom.state !== "playing") return;
+        if (!myRoom || !myWallet || myRoom.state !== "playing" || (myRoom as any).waitingForAdmin) return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.bid !== null) return;
 
@@ -1122,7 +1124,7 @@ wss.on("connection", (ws) => {
       }
 
       case "fold": {
-        if (!myRoom || !myWallet || myRoom.state !== "playing") return;
+        if (!myRoom || !myWallet || myRoom.state !== "playing" || (myRoom as any).waitingForAdmin) return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.bid !== null) return;
         me.bid = 0;
@@ -1138,12 +1140,18 @@ wss.on("connection", (ws) => {
     const me = myRoom.players.find((p) => p.wallet === myWallet);
     if (!me) return;
 
-    if (myRoom.state === "playing" && me.alive) {
-      me.bid = 0;
-      me.lives = 0;
-      me.alive = false;
-      await broadcastState(myRoom);
-      checkAllBid(myRoom);
+    if ((myRoom.state === "playing" || myRoom.state === "finale") && me.alive) {
+      if (myRoom.state === "finale") {
+        me.finalChoice = me.finalChoice ?? "split"; // default to split on disconnect
+        await broadcastState(myRoom);
+        checkAllFinaleChosen(myRoom);
+      } else {
+        me.bid = 0;
+        me.lives = 0;
+        me.alive = false;
+        await broadcastState(myRoom);
+        checkAllBid(myRoom);
+      }
     } else if (myRoom.state === "lobby") {
       myRoom.players = myRoom.players.filter((p) => p.wallet !== myWallet);
       if (myRoom.players.length === 0) {
