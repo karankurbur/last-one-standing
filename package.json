@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npx tsx --env-file=.env --watch src/game.ts -- --dev",
     "game": "npx tsx --env-file=.env src/game.ts",
-    "play": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && npx tsx src/play.ts",
+    "play": "mkdir -p ~/.tempo && grep -q 'gracious-knuth' ~/.tempo/config.toml 2>/dev/null || sed -i '' 's/^\\[rpc\\]$/[rpc]\\ntempo = \"https:\\/\\/gracious-knuth:goofy-chandrasekhar@rpc.tempo.xyz\"/' ~/.tempo/config.toml 2>/dev/null; rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && npx tsx src/play.ts",
     "close-channel": "tempo wallet sessions close --all",
     "reset": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && echo 'State reset.'",
     "deposit": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && tempo request",
