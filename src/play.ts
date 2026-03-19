@@ -446,16 +446,13 @@ process.stdin.on("data", (key) => {
         ws.send(JSON.stringify({ type: "start_game" }));
       }
     }
-    // T to top-up
+    // T to add funds (close + reopen with more)
     if (k.toLowerCase() === "t" && sessionReady) {
-      print(`\n  ${c.yellow}⏳ Topping up...${c.reset}`);
-      tempoRequest(`${SERVER}/api/session/topup`).then((result) => {
-        if (result.success) {
-          print(`  ${c.green}✓ Top-up successful${c.reset}\n`);
-        } else {
-          print(`  ${c.red}Top-up failed: ${result.output.trim()}${c.reset}\n`);
-        }
-      });
+      print("");
+      print(`  ${c.bold}To add more funds, close and reopen with a bigger deposit:${c.reset}`);
+      print(`  ${c.dim}1. Press ${c.bold}[W]${c.reset}${c.dim} to withdraw current session${c.reset}`);
+      print(`  ${c.dim}2. Run:${c.reset} ${c.green}tempo request "${SERVER}/api/session/open?deposit=1.00"${c.reset}`);
+      print("");
     }
   }
 
@@ -502,14 +499,6 @@ process.stdin.on("data", (key) => {
       .catch(() => print(`  ${c.red}Failed to reach server.${c.reset}\n`));
   }
 
-  // T to top-up during game
-  if (gamePhase === "playing" && k.toLowerCase() === "t") {
-    tempoRequest(`${SERVER}/api/session/topup`).then((result) => {
-      if (result.success) {
-        print(`  ${c.green}✓ Top-up successful${c.reset}`);
-      }
-    });
-  }
 });
 
 // --- Start ---

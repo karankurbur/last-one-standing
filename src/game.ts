@@ -494,14 +494,6 @@ app.get(
   }
 );
 
-// Session top-up — player adds more funds to channel
-app.get(
-  "/api/session/topup",
-  mppx.session({ amount: "0.01", unitType: "topup" }),
-  async (c) => {
-    return c.json({ success: true, message: "Top-up received" });
-  }
-);
 
 // Free: list rooms
 app.get("/api/rooms", (c) => {
