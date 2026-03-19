@@ -13,7 +13,7 @@ const CURRENCY = "0x20C000000000000000000000b9537d11c60E8b50" as Address;
 const RECIPIENT = "0xd614701C9Ceef0a82e79Bf65ba8B9dd7A9d741fE" as Address;
 const ESCROW = "0x33b901018174DDabE4841042ab76ba85D4e24f25" as Address;
 const ADMIN_WALLET = "0x454fe1f25eed444d0dfb72a22beaf8cc40a5abd5";
-const PORT = Number(process.env.PORT ?? 3001);
+const PORT = Number(process.env.PORT ?? 3000);
 const DECIMALS = 6;
 const SUGGESTED_DEPOSIT = process.env.SNAKE_DEPOSIT ?? "1.00";
 
