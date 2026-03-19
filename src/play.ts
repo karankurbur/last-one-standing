@@ -366,7 +366,7 @@ function renderGameOver(msg: any) {
     clearInterval(roundTimer);
     roundTimer = null;
   }
-  waitingForChoice = false;
+  waitingForBid = false;
   paymentInProgress = false;
   gamePhase = "gameover";
 
@@ -472,6 +472,16 @@ function connect() {
         renderRoundResult(msg);
         break;
 
+      case "waiting_for_admin":
+        waitingForBid = false;
+        paymentInProgress = false;
+        if (roundTimer) { clearInterval(roundTimer); roundTimer = null; }
+        print(`\n  ${c.dim}${msg.message}${c.reset}`);
+        if (currentState?.host === wallet) {
+          print(`  ${c.bgGreen}${c.bold} Press [Enter] to start round ${msg.round} ${c.reset}\n`);
+        }
+        break;
+
       case "finale_start":
         gamePhase = "playing";
         waitingForFinale = true;
@@ -494,6 +504,30 @@ function connect() {
 
       case "game_over":
         renderGameOver(msg);
+        break;
+
+      case "bid_approved": {
+        // Server validated the bid — now pay
+        const bidCents = msg.bidCents;
+        const bidDollars = (bidCents / 100).toFixed(2);
+        tempoRequest(`${SERVER}/api/session/bid?amount=${bidDollars}`).then((result) => {
+          paymentInProgress = false;
+          if (result.success) {
+            ws.send(JSON.stringify({ type: "bid_confirmed", bidCents }));
+          } else {
+            print(`  ${c.red}Payment failed — auto-folding${c.reset}`);
+            ws.send(JSON.stringify({ type: "fold" }));
+          }
+        });
+        break;
+      }
+
+      case "bid_rejected":
+        paymentInProgress = false;
+        waitingForBid = true;
+        bidInput = "";
+        print(`\n  ${c.red}${msg.reason}${c.reset}`);
+        if (currentRoundMsg) renderRound(currentRoundMsg);
         break;
 
       case "payout":
@@ -539,6 +573,13 @@ process.stdin.on("data", (key) => {
       if (currentState?.host === wallet && currentState?.players.length >= 1) {
         ws.send(JSON.stringify({ type: "start_game" }));
       }
+    }
+  }
+
+  // Enter to advance to next round (admin only, between rounds)
+  if (gamePhase === "playing" && !waitingForBid && !waitingForFinale && !paymentInProgress) {
+    if (k === "\r" || k === "\n") {
+      ws.send(JSON.stringify({ type: "next_round" }));
     }
   }
 
@@ -596,20 +637,13 @@ process.stdin.on("data", (key) => {
         return;
       }
 
+      // Send intent to server for validation first
+      const bidCents = Math.round(bidDollars * 100);
       waitingForBid = false;
       paymentInProgress = true;
       if (currentRoundMsg) renderRound(currentRoundMsg);
-
-      const bidCents = Math.round(bidDollars * 100);
-      tempoRequest(`${SERVER}/api/session/bid?amount=${bidDollars.toFixed(2)}`).then((result) => {
-        paymentInProgress = false;
-        if (result.success) {
-          ws.send(JSON.stringify({ type: "bid_confirmed", bidCents }));
-        } else {
-          print(`  ${c.red}Payment failed — auto-folding${c.reset}`);
-          ws.send(JSON.stringify({ type: "fold" }));
-        }
-      });
+      ws.send(JSON.stringify({ type: "bid_intent", bidCents }));
+      // Payment happens after bid_approved (see message handler)
     }
   }
 

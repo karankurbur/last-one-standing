@@ -311,9 +311,13 @@ function resolveRound(room: Room) {
     return;
   }
 
-  // More than 2 alive → next round
+  // More than 2 alive → wait for admin to start next round
   room.round++;
-  setTimeout(() => startRound(room), 3000);
+  broadcast(room, {
+    type: "waiting_for_admin",
+    round: room.round,
+    message: "Waiting for admin to start next round...",
+  });
 }
 
 // --- Finale: Split or Steal ---
@@ -1041,6 +1045,17 @@ wss.on("connection", (ws) => {
         break;
       }
 
+      case "next_round": {
+        if (!myRoom || !myWallet) return;
+        if (myWallet !== ADMIN_WALLET) {
+          ws.send(JSON.stringify({ type: "error", message: "Only the admin can advance rounds" }));
+          return;
+        }
+        if (myRoom.state !== "playing") return;
+        startRound(myRoom);
+        break;
+      }
+
       case "finale_choice": {
         if (!myRoom || !myWallet || myRoom.state !== "finale") return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
@@ -1056,35 +1071,50 @@ wss.on("connection", (ws) => {
         break;
       }
 
-      case "bid_confirmed": {
+      case "bid_intent": {
+        // Pre-validate bid BEFORE payment. Client pays only after approval.
         if (!myRoom || !myWallet || myRoom.state !== "playing") return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
-        if (!me || !me.alive || me.bid !== null) return;
+        if (!me || !me.alive || me.bid !== null) {
+          ws.send(JSON.stringify({ type: "bid_rejected", reason: "Cannot bid right now" }));
+          return;
+        }
 
         const bidCents = Number(msg.bidCents ?? 0);
         const minBid = roundCost(myRoom.round);
 
         if (bidCents < minBid) {
           ws.send(JSON.stringify({
-            type: "error",
-            message: `Bid too low! Minimum is $${roundCostDollars(myRoom.round)}`,
+            type: "bid_rejected",
+            reason: `Bid too low! Minimum is $${roundCostDollars(myRoom.round)}`,
           }));
           return;
         }
 
-        // Check bid doesn't exceed session balance
         const balance = await getChannelBalance(me.channelId);
         if (balance !== null) {
           const balanceCents = Math.round(parseFloat(balance) * 100);
           if (bidCents > balanceCents) {
             ws.send(JSON.stringify({
-              type: "error",
-              message: `You're betting $${cents2dollars(bidCents)} but only have $${balance} in your session! Deposit more first.`,
+              type: "bid_rejected",
+              reason: `You're betting $${cents2dollars(bidCents)} but only have $${balance} in your session! Deposit more first.`,
             }));
             return;
           }
         }
 
+        console.log(`  Bid approved: ${me.name} $${cents2dollars(bidCents)} (round ${myRoom.round}, min $${roundCostDollars(myRoom.round)})`);
+        ws.send(JSON.stringify({ type: "bid_approved", bidCents }));
+        break;
+      }
+
+      case "bid_confirmed": {
+        if (!myRoom || !myWallet || myRoom.state !== "playing") return;
+        const me = myRoom.players.find((p) => p.wallet === myWallet);
+        if (!me || !me.alive || me.bid !== null) return;
+
+        const bidCents = Number(msg.bidCents ?? 0);
+        console.log(`  Bid confirmed: ${me.name} $${cents2dollars(bidCents)}`);
         me.bid = bidCents;
         await broadcastState(myRoom);
         checkAllBid(myRoom);
