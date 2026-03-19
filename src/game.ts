@@ -22,6 +22,7 @@ const DEV_MODE = process.argv.includes("--dev");
 const MIN_PLAYERS = DEV_MODE ? 1 : 2;
 const DEV_MAX_ROUNDS = 3;
 const SUGGESTED_DEPOSIT = "0.10"; // suggest $0.10 deposit for session
+const SHOW_BIDS = process.argv.includes("--show-bids"); // show bid amounts during round (default: hidden)
 
 // --- Store & Channel tracking ---
 const store = Store.memory();
@@ -48,6 +49,7 @@ interface Player {
   ws: WebSocket;
   alive: boolean;
   bid: number | null; // cents, null = hasn't bid yet, 0 = folded
+  finalChoice: "split" | "steal" | null; // for the finale
   channelId: Hex | null;
   sessionReady: boolean;
 }
@@ -55,7 +57,7 @@ interface Player {
 interface Room {
   id: string;
   players: Player[];
-  state: "lobby" | "playing" | "finished";
+  state: "lobby" | "playing" | "finale" | "finished";
   round: number;
   pot: number; // in cents for display
   host: string; // wallet address
@@ -121,6 +123,8 @@ async function roomState(room: Room) {
       alive: p.alive,
       sessionReady: p.sessionReady,
       hasBid: p.bid !== null,
+      bidDollars: SHOW_BIDS && p.bid !== null && p.bid > 0 ? cents2dollars(p.bid) : null,
+      hasFinaleChoice: p.finalChoice !== null,
       sessionBalance: await getChannelBalance(p.channelId),
     }))
   );
@@ -237,103 +241,158 @@ function resolveRound(room: Room) {
 
   const remaining = room.players.filter((p) => p.alive);
 
-  // Dev mode: keep going until max rounds even with 1 player
-  if (DEV_MODE && remaining.length >= 1 && room.round < DEV_MAX_ROUNDS) {
-    room.round++;
-    setTimeout(() => startRound(room), 3000);
-    return;
-  }
+  // 2 players left → SPLIT OR STEAL finale
+  if (remaining.length === 2) {
+    room.state = "finale";
+    for (const p of remaining) p.finalChoice = null;
 
-  // Dev mode: hit max rounds — declare winner
-  if (DEV_MODE && room.round >= DEV_MAX_ROUNDS && remaining.length >= 1) {
-    room.state = "finished";
-    const winner = remaining[0]!;
     broadcast(room, {
-      type: "game_over",
-      winner: winner.name,
-      winnerWallet: winner.wallet,
+      type: "finale_start",
       pot: room.pot,
       potDollars: cents2dollars(room.pot),
-      message: `[DEV] ${DEV_MAX_ROUNDS} rounds complete. ${winner.name} wins $${cents2dollars(room.pot)}!`,
-      players: room.players.map((p) => ({ wallet: p.wallet, name: p.name })),
+      finalists: remaining.map((p) => p.name),
+      timer: ROUND_TIMER_MS / 1000,
+      message: `SPLIT or STEAL! $${cents2dollars(room.pot)} on the line.`,
     });
-    settleGame(room, winner).catch((err) => console.error("Settlement error:", err));
-    setTimeout(async () => {
-      room.state = "lobby";
-      room.round = 0;
-      room.pot = 0;
-      for (const p of room.players) {
-        p.alive = true;
-        p.bid = null;
-        p.sessionReady = false;
-        p.channelId = null;
+
+    room.roundTimer = setTimeout(() => {
+      // Timeout = auto-split
+      for (const p of remaining) {
+        if (p.finalChoice === null) p.finalChoice = "split";
       }
-      await broadcastState(room);
-    }, 10000);
+      resolveFinale(room);
+    }, ROUND_TIMER_MS);
     return;
   }
 
-  if (remaining.length <= 1) {
-    room.state = "finished";
-
-    if (remaining.length === 1) {
-      const winner = remaining[0]!;
-      broadcast(room, {
-        type: "game_over",
-        winner: winner.name,
-        winnerWallet: winner.wallet,
-        pot: room.pot,
-        potDollars: cents2dollars(room.pot),
-        message: `${winner.name} wins $${cents2dollars(room.pot)}!`,
-        players: room.players.map((p) => ({
-          wallet: p.wallet,
-          name: p.name,
-        })),
-      });
-      // Settle channels and pay winner
-      settleGame(room, winner).catch((err) =>
-        console.error("Settlement error:", err)
-      );
-    } else {
-      // All folded same round — split pot among them
-      const share = folders.length > 0 ? Math.floor(room.pot / folders.length) : 0;
-      broadcast(room, {
-        type: "game_over",
-        winner: null,
-        pot: room.pot,
-        potDollars: cents2dollars(room.pot),
-        splitAmong: folders.map((p) => p.name),
-        shareDollars: cents2dollars(share),
-        message: `Everyone folded! Pot ($${cents2dollars(room.pot)}) split ${folders.length} ways — $${cents2dollars(share)} each.`,
-        players: room.players.map((p) => ({
-          wallet: p.wallet,
-          name: p.name,
-        })),
-      });
-      settleGame(room, null).catch((err) =>
-        console.error("Settlement error:", err)
-      );
-    }
-
-    // Reset room to lobby after 10s (keep sessions for reuse)
-    setTimeout(async () => {
-      room.state = "lobby";
-      room.round = 0;
-      room.pot = 0;
-      for (const p of room.players) {
-        p.alive = true;
-        p.bid = null;
-        p.sessionReady = false;
-        p.channelId = null;
-      }
-      await broadcastState(room);
-    }, 10000);
+  // 1 player left → they win outright
+  if (remaining.length === 1) {
+    endGame(room, remaining[0]!, `${remaining[0]!.name} wins $${cents2dollars(room.pot)}!`);
     return;
   }
 
-  // Next round after 3s pause
+  // 0 players left → everyone folded
+  if (remaining.length === 0) {
+    endGame(room, null, `Everyone folded! Pot ($${cents2dollars(room.pot)}) is lost.`);
+    return;
+  }
+
+  // Dev mode: cap rounds
+  if (DEV_MODE && room.round >= DEV_MAX_ROUNDS) {
+    // Force finale with remaining players
+    room.state = "finale";
+    for (const p of remaining) p.finalChoice = null;
+    broadcast(room, {
+      type: "finale_start",
+      pot: room.pot,
+      potDollars: cents2dollars(room.pot),
+      finalists: remaining.map((p) => p.name),
+      timer: ROUND_TIMER_MS / 1000,
+      message: `[DEV] Max rounds reached. SPLIT or STEAL!`,
+    });
+    room.roundTimer = setTimeout(() => {
+      for (const p of remaining) {
+        if (p.finalChoice === null) p.finalChoice = "split";
+      }
+      resolveFinale(room);
+    }, ROUND_TIMER_MS);
+    return;
+  }
+
+  // More than 2 alive → next round
   room.round++;
   setTimeout(() => startRound(room), 3000);
+}
+
+// --- Finale: Split or Steal ---
+function checkAllFinaleChosen(room: Room) {
+  const finalists = room.players.filter((p) => p.alive);
+  if (finalists.every((p) => p.finalChoice !== null)) {
+    if (room.roundTimer) {
+      clearTimeout(room.roundTimer);
+      room.roundTimer = null;
+    }
+    resolveFinale(room);
+  }
+}
+
+function resolveFinale(room: Room) {
+  const finalists = room.players.filter((p) => p.alive);
+  const [a, b] = finalists;
+
+  if (!a || !b) {
+    // Edge case: only 1 finalist (shouldn't happen)
+    endGame(room, a ?? null, a ? `${a.name} wins!` : "No winner.");
+    return;
+  }
+
+  const choiceA = a.finalChoice!;
+  const choiceB = b.finalChoice!;
+
+  let winner: Player | null = null;
+  let message: string;
+
+  if (choiceA === "split" && choiceB === "split") {
+    // Both split → player with more remaining session balance wins
+    // For now, split the pot evenly (both are winners)
+    message = `Both SPLIT! ${a.name} and ${b.name} share the $${cents2dollars(room.pot)} pot.`;
+  } else if (choiceA === "steal" && choiceB === "split") {
+    winner = a;
+    message = `${a.name} STEALS! ${b.name} split but gets nothing. ${a.name} takes $${cents2dollars(room.pot)}.`;
+  } else if (choiceA === "split" && choiceB === "steal") {
+    winner = b;
+    message = `${b.name} STEALS! ${a.name} split but gets nothing. ${b.name} takes $${cents2dollars(room.pot)}.`;
+  } else {
+    // Both steal → nobody wins
+    message = `Both STEAL! Nobody wins. $${cents2dollars(room.pot)} is lost.`;
+  }
+
+  broadcast(room, {
+    type: "finale_result",
+    choices: [
+      { name: a.name, wallet: a.wallet, choice: choiceA },
+      { name: b.name, wallet: b.wallet, choice: choiceB },
+    ],
+    pot: room.pot,
+    potDollars: cents2dollars(room.pot),
+    winner: winner?.name ?? null,
+    winnerWallet: winner?.wallet ?? null,
+    message,
+  });
+
+  endGame(room, winner, message);
+}
+
+// --- End game + settle ---
+function endGame(room: Room, winner: Player | null, message: string) {
+  room.state = "finished";
+
+  broadcast(room, {
+    type: "game_over",
+    winner: winner?.name ?? null,
+    winnerWallet: winner?.wallet ?? null,
+    pot: room.pot,
+    potDollars: cents2dollars(room.pot),
+    message,
+    players: room.players.map((p) => ({ wallet: p.wallet, name: p.name })),
+  });
+
+  settleGame(room, winner).catch((err) => console.error("Settlement error:", err));
+
+  // Reset room to lobby after 10s
+  setTimeout(async () => {
+    room.state = "lobby";
+    room.round = 0;
+    room.pot = 0;
+    for (const p of room.players) {
+      p.alive = true;
+      p.bid = null;
+      p.finalChoice = null;
+      p.sessionReady = false;
+      p.channelId = null;
+    }
+    await broadcastState(room);
+  }, 10000);
 }
 
 // --- Settlement ---
@@ -750,9 +809,10 @@ wss.on("connection", (ws) => {
             existing.name = name;
             existing.alive = true;
             existing.bid = null;
+            existing.finalChoice = null;
           } else {
             existingLobby.players.push({
-              wallet, name, ws, alive: true, choice: null,
+              wallet, name, ws, alive: true, bid: null, finalChoice: null,
               channelId: walletChannels.get(wallet) ?? null,
               sessionReady: false,
             });
@@ -768,7 +828,7 @@ wss.on("connection", (ws) => {
         const room: Room = {
           id,
           players: [{
-            wallet, name, ws, alive: true, choice: null,
+            wallet, name, ws, alive: true, bid: null, finalChoice: null,
             channelId: walletChannels.get(wallet) ?? null,
             sessionReady: false,
           }],
@@ -810,7 +870,7 @@ wss.on("connection", (ws) => {
           existing.name = name;
         } else {
           room.players.push({
-            wallet, name, ws, alive: true, choice: null,
+            wallet, name, ws, alive: true, bid: null, finalChoice: null,
             channelId: walletChannels.get(wallet) ?? null,
             sessionReady: false,
           });
@@ -860,8 +920,24 @@ wss.on("connection", (ws) => {
         for (const p of myRoom.players) {
           p.alive = true;
           p.bid = null;
+          p.finalChoice = null;
         }
         startRound(myRoom);
+        break;
+      }
+
+      case "finale_choice": {
+        if (!myRoom || !myWallet || myRoom.state !== "finale") return;
+        const me = myRoom.players.find((p) => p.wallet === myWallet);
+        if (!me || !me.alive || me.finalChoice !== null) return;
+        const choice = msg.choice;
+        if (choice !== "split" && choice !== "steal") {
+          ws.send(JSON.stringify({ type: "error", message: "Choose 'split' or 'steal'" }));
+          return;
+        }
+        me.finalChoice = choice;
+        await broadcastState(myRoom);
+        checkAllFinaleChosen(myRoom);
         break;
       }
 

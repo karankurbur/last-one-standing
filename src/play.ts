@@ -62,6 +62,7 @@ const c = {
 // --- State ---
 let currentState: any = null;
 let waitingForBid = false;
+let waitingForFinale = false;
 let paymentInProgress = false;
 let bidInput = ""; // accumulates typed digits for bid
 let gamePhase: "connecting" | "lobby" | "playing" | "gameover" = "connecting";
@@ -298,6 +299,57 @@ function renderRoundResult(msg: any) {
   print("");
 }
 
+function renderFinale(msg: any) {
+  clear();
+  const lines: string[] = [
+    "",
+    `${c.bold}${c.yellow}  SPLIT OR STEAL${c.reset}`,
+    "",
+    `${c.dim}═════════════════════════════════════════════${c.reset}`,
+    "",
+    `  ${c.bold}${c.yellow}Prize Pool: $${msg.potDollars}${c.reset}`,
+    "",
+    `  ${c.bold}Finalists:${c.reset} ${msg.finalists.join(" vs ")}`,
+    "",
+    `${c.dim}─────────────────────────────────────────────${c.reset}`,
+    "",
+    `  ${c.bold}${c.green}[1]${c.reset} SPLIT ${c.dim}— share the pot if both split${c.reset}`,
+    `  ${c.bold}${c.red}[2]${c.reset} STEAL ${c.dim}— take it all (if they split)${c.reset}`,
+    "",
+    `  ${c.dim}Both steal = nobody wins!${c.reset}`,
+    "",
+  ];
+  for (const line of lines) print(line);
+}
+
+function renderFinaleResult(msg: any) {
+  clear();
+  const lines: string[] = [
+    "",
+    `${c.bold}${c.yellow}  SPLIT OR STEAL — REVEAL${c.reset}`,
+    "",
+    `${c.dim}═════════════════════════════════════════════${c.reset}`,
+    "",
+  ];
+
+  for (const ch of msg.choices) {
+    const isMe = ch.wallet === wallet;
+    const nameStr = isMe ? `${c.cyan}${ch.name}${c.reset}` : ch.name;
+    const choiceStr = ch.choice === "steal"
+      ? `${c.red}${c.bold}STEAL${c.reset}`
+      : `${c.green}${c.bold}SPLIT${c.reset}`;
+    lines.push(`  ${nameStr}: ${choiceStr}`);
+  }
+
+  lines.push("");
+  lines.push(`  ${c.bold}${c.yellow}Pot: $${msg.potDollars}${c.reset}`);
+  lines.push("");
+  lines.push(`  ${msg.message}`);
+  lines.push("");
+
+  for (const line of lines) print(line);
+}
+
 function renderGameOver(msg: any) {
   if (roundTimer) {
     clearInterval(roundTimer);
@@ -409,6 +461,26 @@ function connect() {
         renderRoundResult(msg);
         break;
 
+      case "finale_start":
+        gamePhase = "playing";
+        waitingForFinale = true;
+        waitingForBid = false;
+        if (roundTimer) clearInterval(roundTimer);
+        secondsLeft = msg.timer;
+        roundTimer = setInterval(() => {
+          secondsLeft--;
+          if (secondsLeft <= 0 && roundTimer) clearInterval(roundTimer);
+          renderTimer();
+        }, 1000);
+        renderFinale(msg);
+        break;
+
+      case "finale_result":
+        waitingForFinale = false;
+        if (roundTimer) { clearInterval(roundTimer); roundTimer = null; }
+        renderFinaleResult(msg);
+        break;
+
       case "game_over":
         renderGameOver(msg);
         break;
@@ -457,6 +529,20 @@ process.stdin.on("data", (key) => {
         ws.send(JSON.stringify({ type: "start_game" }));
       }
     }
+  }
+
+  // Finale: 1=split, 2=steal
+  if (gamePhase === "playing" && waitingForFinale) {
+    if (k === "1") {
+      ws.send(JSON.stringify({ type: "finale_choice", choice: "split" }));
+      waitingForFinale = false;
+      print(`\n  ${c.green}You chose SPLIT${c.reset}\n`);
+    } else if (k === "2") {
+      ws.send(JSON.stringify({ type: "finale_choice", choice: "steal" }));
+      waitingForFinale = false;
+      print(`\n  ${c.red}You chose STEAL${c.reset}\n`);
+    }
+    return;
   }
 
   if (gamePhase === "playing" && waitingForBid && !paymentInProgress) {
