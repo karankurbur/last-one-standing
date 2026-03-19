@@ -5,7 +5,7 @@ import { tempo as tempoServer } from "mppx/server";
 import { Session } from "mppx/tempo";
 import { serve } from "@hono/node-server";
 import { WebSocketServer, WebSocket } from "ws";
-import { createWalletClient, http, formatUnits, type Hex, type Address } from "viem";
+import { createClient, createWalletClient, http, formatUnits, type Hex, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { tempo as tempoChain } from "viem/chains";
 
@@ -16,7 +16,6 @@ const ESCROW = "0x33b901018174DDabE4841042ab76ba85D4e24f25" as Address; // payme
 const ADMIN_WALLET = "0x454fe1f25eed444d0dfb72a22beaf8cc40a5abd5"; // only this wallet can start games
 const PORT = Number(process.env.PORT ?? 3000);
 const ROUND_TIMER_MS = 60_000;
-const BASE_COST_CENTS = 1; // $0.01 round 1
 const DECIMALS = 6;
 const DEV_MODE = process.argv.includes("--dev");
 const MIN_PLAYERS = DEV_MODE ? 1 : 2;
@@ -33,7 +32,7 @@ const channelStore = Session.ChannelStore.fromStore(store);
 const SETTLE_KEY = process.env.SETTLE_PRIVATE_KEY;
 const settleAccount = SETTLE_KEY ? privateKeyToAccount(SETTLE_KEY as `0x${string}`) : null;
 const viemClient = settleAccount
-  ? createWalletClient({ account: settleAccount, chain: tempoChain, transport: http("https://gracious-knuth:goofy-chandrasekhar@rpc.tempo.xyz") })
+  ? createWalletClient({ account: settleAccount, chain: tempoChain, transport: http("https://tempo-mainnet.g.alchemy.com/v2/wvo-jvwr3Nsw1nDafH25v") })
   : null;
 
 // wallet → channelId (active)
@@ -51,7 +50,7 @@ interface Player {
   alive: boolean;
   lives: number;
   bid: number | null; // cents, null = hasn't bid yet, 0 = folded
-  finalChoice: "split" | "steal" | null; // for the finale
+  finalChoice: "rock" | "paper" | "scissors" | null; // for the finale
   channelId: Hex | null;
   sessionReady: boolean;
 }
@@ -71,14 +70,6 @@ const rooms = new Map<string, Room>();
 // --- Helpers ---
 function genRoomId(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-function roundCost(round: number): number {
-  return BASE_COST_CENTS * Math.pow(2, round - 1);
-}
-
-function roundCostDollars(round: number): string {
-  return (roundCost(round) / 100).toFixed(2);
 }
 
 function cents2dollars(c: number): string {
@@ -139,10 +130,6 @@ async function roomState(room: Room) {
     pot: room.pot,
     potDollars: cents2dollars(room.pot),
     host: room.host,
-    minBidDollars:
-      room.state === "playing"
-        ? roundCostDollars(room.round)
-        : roundCostDollars(1),
     maxLives: MAX_LIVES,
     players,
   };
@@ -150,7 +137,6 @@ async function roomState(room: Room) {
 
 // --- Game Logic ---
 function startRound(room: Room) {
-  const minBid = roundCost(room.round);
   const alive = room.players.filter((p) => p.alive);
 
   for (const p of alive) p.bid = null;
@@ -158,8 +144,6 @@ function startRound(room: Room) {
   broadcast(room, {
     type: "round_start",
     round: room.round,
-    minBid,
-    minBidDollars: roundCostDollars(room.round),
     timer: ROUND_TIMER_MS / 1000,
     alivePlayers: alive.map((p) => p.wallet),
   });
@@ -185,18 +169,12 @@ function checkAllBid(room: Room) {
 }
 
 function resolveRound(room: Room) {
-  const minBid = roundCost(room.round);
   const alive = room.players.filter((p) => p.alive);
 
-  // Separate bidders from folders (bid=0 means fold)
-  const bidders: Player[] = [];
-  const folders: Player[] = [];
-  for (const p of alive) {
-    if (p.bid && p.bid > 0) {
-      bidders.push(p);
-    } else {
-      folders.push(p);
-    }
+  // Everyone is a bidder (0 is a valid bid)
+  const bidders = alive;
+  for (const p of bidders) {
+    if (p.bid === null) p.bid = 0;
   }
 
   // Find the lowest bid among bidders
@@ -207,7 +185,7 @@ function resolveRound(room: Room) {
     const lowestBid = Math.min(...bidders.map((p) => p.bid!));
     // Eliminate all players with the lowest bid (ties = all eliminated)
     for (const p of bidders) {
-      if (p.bid === lowestBid && bidders.length > 1) {
+      if (p.bid === lowestBid) {
         eliminated.push(p);
       } else {
         survivors.push(p);
@@ -227,11 +205,7 @@ function resolveRound(room: Room) {
     room.pot += p.bid!;
   }
 
-  // Lose a life for folders and lowest bidders
-  for (const p of folders) {
-    p.lives--;
-    if (p.lives <= 0) p.alive = false;
-  }
+  // Lose a life for lowest bidders
   for (const p of eliminated) {
     p.lives--;
     if (p.lives <= 0) p.alive = false;
@@ -240,11 +214,8 @@ function resolveRound(room: Room) {
   broadcast(room, {
     type: "round_result",
     round: room.round,
-    minBid,
-    minBidDollars: roundCostDollars(room.round),
     bids: bidders.map((p) => ({ name: p.name, bid: p.bid!, bidDollars: cents2dollars(p.bid!), lives: p.lives })),
     eliminated: eliminated.map((p) => ({ name: p.name, lives: p.lives })),
-    folders: folders.map((p) => ({ name: p.name, lives: p.lives })),
     survivors: survivors.map((p) => ({ name: p.name, lives: p.lives })),
     maxLives: MAX_LIVES,
     pot: room.pot,
@@ -253,7 +224,7 @@ function resolveRound(room: Room) {
 
   const remaining = room.players.filter((p) => p.alive);
 
-  // 2 players left → SPLIT OR STEAL finale
+  // 2 players left → Rock Paper Scissors finale
   if (remaining.length === 2) {
     room.state = "finale";
     for (const p of remaining) p.finalChoice = null;
@@ -264,13 +235,14 @@ function resolveRound(room: Room) {
       potDollars: cents2dollars(room.pot),
       finalists: remaining.map((p) => p.name),
       timer: ROUND_TIMER_MS / 1000,
-      message: `SPLIT or STEAL! $${cents2dollars(room.pot)} on the line.`,
+      message: `Rock Paper Scissors! $${cents2dollars(room.pot)} on the line.`,
     });
 
     room.roundTimer = setTimeout(() => {
-      // Timeout = auto-split
+      // Timeout = random choice
+      const choices: ("rock" | "paper" | "scissors")[] = ["rock", "paper", "scissors"];
       for (const p of remaining) {
-        if (p.finalChoice === null) p.finalChoice = "split";
+        if (p.finalChoice === null) p.finalChoice = choices[Math.floor(Math.random() * 3)]!;
       }
       resolveFinale(room);
     }, ROUND_TIMER_MS);
@@ -300,11 +272,12 @@ function resolveRound(room: Room) {
       potDollars: cents2dollars(room.pot),
       finalists: remaining.map((p) => p.name),
       timer: ROUND_TIMER_MS / 1000,
-      message: `[DEV] Max rounds reached. SPLIT or STEAL!`,
+      message: `[DEV] Max rounds reached. Rock Paper Scissors!`,
     });
     room.roundTimer = setTimeout(() => {
+      const choices: ("rock" | "paper" | "scissors")[] = ["rock", "paper", "scissors"];
       for (const p of remaining) {
-        if (p.finalChoice === null) p.finalChoice = "split";
+        if (p.finalChoice === null) p.finalChoice = choices[Math.floor(Math.random() * 3)]!;
       }
       resolveFinale(room);
     }, ROUND_TIMER_MS);
@@ -321,7 +294,9 @@ function resolveRound(room: Room) {
   });
 }
 
-// --- Finale: Split or Steal ---
+// --- Finale: Rock Paper Scissors ---
+const RPS_WINS: Record<string, string> = { rock: "scissors", scissors: "paper", paper: "rock" };
+
 function checkAllFinaleChosen(room: Room) {
   const finalists = room.players.filter((p) => p.alive);
   if (finalists.every((p) => p.finalChoice !== null)) {
@@ -338,7 +313,6 @@ function resolveFinale(room: Room) {
   const [a, b] = finalists;
 
   if (!a || !b) {
-    // Edge case: only 1 finalist (shouldn't happen)
     endGame(room, a ?? null, a ? `${a.name} wins!` : "No winner.");
     return;
   }
@@ -347,25 +321,19 @@ function resolveFinale(room: Room) {
   const choiceB = b.finalChoice!;
 
   let winner: Player | null = null;
+  let isDraw = false;
   let message: string;
 
-  if (choiceA === "split" && choiceB === "split") {
-    // Both split → player with more remaining session balance wins
-    // For now, split the pot evenly (both are winners)
-    message = `Both SPLIT! ${a.name} and ${b.name} share the $${cents2dollars(room.pot)} pot.`;
-  } else if (choiceA === "steal" && choiceB === "split") {
+  if (choiceA === choiceB) {
+    isDraw = true;
+    message = `Both chose ${choiceA.toUpperCase()}! It's a draw — playing again...`;
+  } else if (RPS_WINS[choiceA] === choiceB) {
     winner = a;
-    message = `${a.name} STEALS! ${b.name} split but gets nothing. ${a.name} takes $${cents2dollars(room.pot)}.`;
-  } else if (choiceA === "split" && choiceB === "steal") {
-    winner = b;
-    message = `${b.name} STEALS! ${a.name} split but gets nothing. ${b.name} takes $${cents2dollars(room.pot)}.`;
+    message = `${a.name}'s ${choiceA.toUpperCase()} beats ${b.name}'s ${choiceB.toUpperCase()}! ${a.name} wins $${cents2dollars(room.pot)}!`;
   } else {
-    // Both steal → nobody wins
-    message = `Both STEAL! Nobody wins. $${cents2dollars(room.pot)} is lost.`;
+    winner = b;
+    message = `${b.name}'s ${choiceB.toUpperCase()} beats ${a.name}'s ${choiceA.toUpperCase()}! ${b.name} wins $${cents2dollars(room.pot)}!`;
   }
-
-  const isBothSplit = choiceA === "split" && choiceB === "split";
-  const isBothSteal = choiceA === "steal" && choiceB === "steal";
 
   broadcast(room, {
     type: "finale_result",
@@ -377,16 +345,31 @@ function resolveFinale(room: Room) {
     potDollars: cents2dollars(room.pot),
     winner: winner?.name ?? null,
     winnerWallet: winner?.wallet ?? null,
-    isBothSplit,
-    isBothSteal,
+    isDraw,
     message,
   });
 
-  if (isBothSplit) {
-    // Both split: settle channels, pay each half
-    endGameSplit(room, [a, b], message);
+  if (isDraw) {
+    // Reset choices and play again
+    for (const p of finalists) p.finalChoice = null;
+    setTimeout(() => {
+      broadcast(room, {
+        type: "finale_start",
+        pot: room.pot,
+        potDollars: cents2dollars(room.pot),
+        finalists: finalists.map((p) => p.name),
+        timer: ROUND_TIMER_MS / 1000,
+        message: `Draw! Rock Paper Scissors again! $${cents2dollars(room.pot)} on the line.`,
+      });
+      room.roundTimer = setTimeout(() => {
+        const choices: ("rock" | "paper" | "scissors")[] = ["rock", "paper", "scissors"];
+        for (const p of finalists) {
+          if (p.finalChoice === null) p.finalChoice = choices[Math.floor(Math.random() * 3)]!;
+        }
+        resolveFinale(room);
+      }, ROUND_TIMER_MS);
+    }, 3000);
   } else {
-    // One winner or nobody
     endGame(room, winner, message);
   }
 }
@@ -618,8 +601,15 @@ async function settleGame(room: Room, winner: Player | null) {
 // --- HTTP ---
 const app = new Hono();
 
+const ALCHEMY_RPC = "https://tempo-mainnet.g.alchemy.com/v2/wvo-jvwr3Nsw1nDafH25v";
+
 const mppx = Mppx.create({
-  methods: [tempo({ currency: CURRENCY, recipient: RECIPIENT, store })],
+  methods: [tempo({
+    currency: CURRENCY,
+    recipient: RECIPIENT,
+    store,
+    getClient: () => createClient({ chain: tempoChain, transport: http(ALCHEMY_RPC) }),
+  })],
 });
 
 // Session open — player deposits into escrow to create payment channel
@@ -1063,8 +1053,8 @@ wss.on("connection", (ws) => {
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.finalChoice !== null) return;
         const choice = msg.choice;
-        if (choice !== "split" && choice !== "steal") {
-          ws.send(JSON.stringify({ type: "error", message: "Choose 'split' or 'steal'" }));
+        if (choice !== "rock" && choice !== "paper" && choice !== "scissors") {
+          ws.send(JSON.stringify({ type: "error", message: "Choose 'rock', 'paper', or 'scissors'" }));
           return;
         }
         me.finalChoice = choice;
@@ -1083,13 +1073,9 @@ wss.on("connection", (ws) => {
         }
 
         const bidCents = Number(msg.bidCents ?? 0);
-        const minBid = roundCost(myRoom.round);
 
-        if (bidCents < minBid) {
-          ws.send(JSON.stringify({
-            type: "bid_rejected",
-            reason: `Bid too low! Minimum is $${roundCostDollars(myRoom.round)}`,
-          }));
+        if (bidCents < 0) {
+          ws.send(JSON.stringify({ type: "bid_rejected", reason: "Bid cannot be negative" }));
           return;
         }
 
@@ -1105,7 +1091,7 @@ wss.on("connection", (ws) => {
           }
         }
 
-        console.log(`  Bid approved: ${me.name} $${cents2dollars(bidCents)} (round ${myRoom.round}, min $${roundCostDollars(myRoom.round)})`);
+        console.log(`  Bid approved: ${me.name} $${cents2dollars(bidCents)} (round ${myRoom.round})`);
         ws.send(JSON.stringify({ type: "bid_approved", bidCents }));
         break;
       }
@@ -1124,6 +1110,7 @@ wss.on("connection", (ws) => {
       }
 
       case "fold": {
+        // Legacy: treat fold as a $0 bid
         if (!myRoom || !myWallet || myRoom.state !== "playing" || (myRoom as any).waitingForAdmin) return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
         if (!me || !me.alive || me.bid !== null) return;
@@ -1142,7 +1129,8 @@ wss.on("connection", (ws) => {
 
     if ((myRoom.state === "playing" || myRoom.state === "finale") && me.alive) {
       if (myRoom.state === "finale") {
-        me.finalChoice = me.finalChoice ?? "split"; // default to split on disconnect
+        const choices: ("rock" | "paper" | "scissors")[] = ["rock", "paper", "scissors"];
+        me.finalChoice = me.finalChoice ?? choices[Math.floor(Math.random() * 3)]!; // random on disconnect
         await broadcastState(myRoom);
         checkAllFinaleChosen(myRoom);
       } else {

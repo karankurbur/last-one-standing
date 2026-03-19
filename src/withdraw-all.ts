@@ -17,7 +17,7 @@ const ESCROW = "0x33b901018174DDabE4841042ab76ba85D4e24f25" as Address;
 const USDC_E = "0x20C000000000000000000000b9537d11c60E8b50" as Address;
 const DECIMALS = 6;
 const START_BLOCK = 10220000n;
-const RPC = "https://gracious-knuth:goofy-chandrasekhar@rpc.tempo.xyz";
+const RPC = "https://tempo-mainnet.g.alchemy.com/v2/wvo-jvwr3Nsw1nDafH25v";
 
 const channelsAbi = [{
   name: "channels", type: "function",

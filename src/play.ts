@@ -222,7 +222,7 @@ function renderRound(roundMsg: any) {
     "",
     `  ${c.bold}${c.yellow}Prize Pool: $${state?.potDollars ?? "0.00"}${c.reset}`,
     "",
-    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Min bid: ${c.red}$${roundMsg.minBidDollars}${c.reset}  ${c.dim}|${c.reset}  Session: ${c.green}$${sessionBal}${c.reset}`,
+    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Session: ${c.green}$${sessionBal}${c.reset}`,
     "",
   ];
 
@@ -254,8 +254,8 @@ function renderRound(roundMsg: any) {
     print(`  ${c.yellow}⏳ Processing bid payment...${c.reset}`);
     print("");
   } else if (amAlive && waitingForBid) {
-    print(`  ${c.bold}Enter bid amount ${c.dim}(min $${roundMsg.minBidDollars})${c.reset}${c.bold}: $${bidInput}▌${c.reset}`);
-    print(`  ${c.dim}Type amount, press [Enter] to confirm, [F] to fold${c.reset}`);
+    print(`  ${c.bold}Enter bid amount ${c.dim}($0 or more)${c.reset}${c.bold}: $${bidInput}▌${c.reset}`);
+    print(`  ${c.dim}Type amount and press [Enter] to confirm${c.reset}`);
     print("");
   } else if (amAlive) {
     print(`  ${c.dim}Waiting for others...${c.reset}`);
@@ -299,13 +299,6 @@ function renderRoundResult(msg: any) {
     });
     print(`    ${c.red}Lowest bid:${c.reset} ${names.join(", ")}`);
   }
-  if (msg.folders && msg.folders.length > 0) {
-    const names = msg.folders.map((f: any) => {
-      const dead = f.lives <= 0;
-      return dead ? `${c.red}${f.name} [OUT]${c.reset}` : `${c.yellow}${f.name} (-1 life)${c.reset}`;
-    });
-    print(`    ${c.red}Folded:${c.reset} ${names.join(", ")}`);
-  }
   print(`    ${c.yellow}Pot: $${msg.potDollars}${c.reset}`);
   print("");
 }
@@ -314,7 +307,7 @@ function renderFinale(msg: any) {
   clear();
   const lines: string[] = [
     "",
-    `${c.bold}${c.yellow}  SPLIT OR STEAL${c.reset}`,
+    `${c.bold}${c.yellow}  ROCK PAPER SCISSORS${c.reset}`,
     "",
     `${c.dim}═════════════════════════════════════════════${c.reset}`,
     "",
@@ -324,20 +317,21 @@ function renderFinale(msg: any) {
     "",
     `${c.dim}─────────────────────────────────────────────${c.reset}`,
     "",
-    `  ${c.bold}${c.green}[1]${c.reset} SPLIT ${c.dim}— share the pot if both split${c.reset}`,
-    `  ${c.bold}${c.red}[2]${c.reset} STEAL ${c.dim}— take it all (if they split)${c.reset}`,
-    "",
-    `  ${c.dim}Both steal = nobody wins!${c.reset}`,
+    `  ${c.bold}${c.green}[1]${c.reset} ROCK     ${c.dim}🪨${c.reset}`,
+    `  ${c.bold}${c.cyan}[2]${c.reset} PAPER    ${c.dim}📄${c.reset}`,
+    `  ${c.bold}${c.red}[3]${c.reset} SCISSORS ${c.dim}✂️${c.reset}`,
     "",
   ];
   for (const line of lines) print(line);
 }
 
+const RPS_EMOJI: Record<string, string> = { rock: "🪨", paper: "📄", scissors: "✂️" };
+
 function renderFinaleResult(msg: any) {
   clear();
   const lines: string[] = [
     "",
-    `${c.bold}${c.yellow}  SPLIT OR STEAL — REVEAL${c.reset}`,
+    `${c.bold}${c.yellow}  ROCK PAPER SCISSORS — REVEAL${c.reset}`,
     "",
     `${c.dim}═════════════════════════════════════════════${c.reset}`,
     "",
@@ -346,10 +340,8 @@ function renderFinaleResult(msg: any) {
   for (const ch of msg.choices) {
     const isMe = ch.wallet === wallet;
     const nameStr = isMe ? `${c.cyan}${ch.name}${c.reset}` : ch.name;
-    const choiceStr = ch.choice === "steal"
-      ? `${c.red}${c.bold}STEAL${c.reset}`
-      : `${c.green}${c.bold}SPLIT${c.reset}`;
-    lines.push(`  ${nameStr}: ${choiceStr}`);
+    const emoji = RPS_EMOJI[ch.choice] ?? "";
+    lines.push(`  ${nameStr}: ${c.bold}${ch.choice.toUpperCase()}${c.reset} ${emoji}`);
   }
 
   lines.push("");
@@ -509,16 +501,22 @@ function connect() {
       case "bid_approved": {
         // Server validated the bid — now pay
         const bidCents = msg.bidCents;
-        const bidDollars = (bidCents / 100).toFixed(2);
-        tempoRequest(`${SERVER}/api/session/bid?amount=${bidDollars}`).then((result) => {
+        if (bidCents === 0) {
+          // No payment needed for $0 bid
           paymentInProgress = false;
-          if (result.success) {
-            ws.send(JSON.stringify({ type: "bid_confirmed", bidCents }));
-          } else {
-            print(`  ${c.red}Payment failed — auto-folding${c.reset}`);
-            ws.send(JSON.stringify({ type: "fold" }));
-          }
-        });
+          ws.send(JSON.stringify({ type: "bid_confirmed", bidCents: 0 }));
+        } else {
+          const bidDollars = (bidCents / 100).toFixed(2);
+          tempoRequest(`${SERVER}/api/session/bid?amount=${bidDollars}`).then((result) => {
+            paymentInProgress = false;
+            if (result.success) {
+              ws.send(JSON.stringify({ type: "bid_confirmed", bidCents }));
+            } else {
+              print(`  ${c.red}Payment failed — bidding $0 instead${c.reset}`);
+              ws.send(JSON.stringify({ type: "bid_confirmed", bidCents: 0 }));
+            }
+          });
+        }
         break;
       }
 
@@ -583,31 +581,26 @@ process.stdin.on("data", (key) => {
     }
   }
 
-  // Finale: 1=split, 2=steal
+  // Finale: 1=rock, 2=paper, 3=scissors
   if (gamePhase === "playing" && waitingForFinale) {
     if (k === "1") {
-      ws.send(JSON.stringify({ type: "finale_choice", choice: "split" }));
+      ws.send(JSON.stringify({ type: "finale_choice", choice: "rock" }));
       waitingForFinale = false;
-      print(`\n  ${c.green}You chose SPLIT${c.reset}\n`);
+      print(`\n  ${c.green}You chose ROCK 🪨${c.reset}\n`);
     } else if (k === "2") {
-      ws.send(JSON.stringify({ type: "finale_choice", choice: "steal" }));
+      ws.send(JSON.stringify({ type: "finale_choice", choice: "paper" }));
       waitingForFinale = false;
-      print(`\n  ${c.red}You chose STEAL${c.reset}\n`);
+      print(`\n  ${c.cyan}You chose PAPER 📄${c.reset}\n`);
+    } else if (k === "3") {
+      ws.send(JSON.stringify({ type: "finale_choice", choice: "scissors" }));
+      waitingForFinale = false;
+      print(`\n  ${c.red}You chose SCISSORS ✂️${c.reset}\n`);
     }
     return;
   }
 
   if (gamePhase === "playing" && waitingForBid && !paymentInProgress) {
     const lower = k.toLowerCase();
-
-    // F to fold
-    if (lower === "f") {
-      ws.send(JSON.stringify({ type: "fold" }));
-      waitingForBid = false;
-      bidInput = "";
-      if (currentRoundMsg) renderRound(currentRoundMsg);
-      return;
-    }
 
     // Backspace
     if (k === "\x7f" || k === "\b") {
@@ -625,15 +618,9 @@ process.stdin.on("data", (key) => {
 
     // Enter to confirm bid
     if (k === "\r" || k === "\n") {
-      const bidDollars = parseFloat(bidInput);
-      if (isNaN(bidDollars) || bidDollars <= 0) {
+      const bidDollars = parseFloat(bidInput || "0");
+      if (isNaN(bidDollars) || bidDollars < 0) {
         print(`  ${c.red}Enter a valid amount${c.reset}`);
-        return;
-      }
-
-      const minBidDollars = parseFloat(currentRoundMsg?.minBidDollars ?? "0.01");
-      if (bidDollars < minBidDollars) {
-        print(`  ${c.red}Minimum bid is $${currentRoundMsg?.minBidDollars}${c.reset}`);
         return;
       }
 
