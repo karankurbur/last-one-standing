@@ -198,7 +198,8 @@ function renderLobby(state: any) {
 
   lines.push("");
   if (sessionReady) {
-    lines.push(`  ${c.dim}[T] Top-up  [W] Withdraw deposit  [Ctrl+C] Quit${c.reset}`);
+    lines.push(`  ${c.dim}[W] Withdraw deposit  [Ctrl+C] Quit${c.reset}`);
+    lines.push(`  ${c.dim}Auto top-up: channel refills from your wallet when low${c.reset}`);
   } else {
     lines.push(`  ${c.dim}[Ctrl+C] Quit${c.reset}`);
   }
@@ -445,14 +446,6 @@ process.stdin.on("data", (key) => {
       if (currentState?.host === wallet && currentState?.players.length >= 1) {
         ws.send(JSON.stringify({ type: "start_game" }));
       }
-    }
-    // T to add funds (close + reopen with more)
-    if (k.toLowerCase() === "t" && sessionReady) {
-      print("");
-      print(`  ${c.bold}To add more funds, close and reopen with a bigger deposit:${c.reset}`);
-      print(`  ${c.dim}1. Press ${c.bold}[W]${c.reset}${c.dim} to withdraw current session${c.reset}`);
-      print(`  ${c.dim}2. Run:${c.reset} ${c.green}tempo request "${SERVER}/api/session/open?deposit=1.00"${c.reset}`);
-      print("");
     }
   }
 
