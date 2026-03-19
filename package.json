@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "npx tsx --env-file=.env --watch src/game.ts -- --dev",
     "game": "npx tsx --env-file=.env src/game.ts",
-    "play": "npx tsx src/play.ts",
+    "play": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && npx tsx src/play.ts",
     "reset": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && echo 'State reset.'",
+    "deposit": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_*.lock && tempo request",
     "withdraw-all": "npx tsx --env-file=.env src/withdraw-all.ts"
   },
   "keywords": ["game", "crypto", "micropayments", "tempo", "cli"],
