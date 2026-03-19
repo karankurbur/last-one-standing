@@ -198,8 +198,8 @@ function renderLobby(state: any) {
 
   lines.push("");
   if (sessionReady) {
-    lines.push(`  ${c.dim}Add funds:${c.reset} ${c.green}tempo request "${SERVER}/api/session/fund?amount=0.10"${c.reset}`);
-    lines.push(`  ${c.dim}[W] Withdraw deposit  [Ctrl+C] Quit${c.reset}`);
+    lines.push(`  ${c.dim}Add funds: press [W] to withdraw, then reopen with more${c.reset}`);
+    lines.push(`  ${c.dim}[W] Withdraw & close channel  [Ctrl+C] Quit${c.reset}`);
   } else {
     lines.push(`  ${c.dim}[Ctrl+C] Quit${c.reset}`);
   }
