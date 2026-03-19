@@ -61,8 +61,9 @@ const c = {
 
 // --- State ---
 let currentState: any = null;
-let waitingForChoice = false;
+let waitingForBid = false;
 let paymentInProgress = false;
+let bidInput = ""; // accumulates typed digits for bid
 let gamePhase: "connecting" | "lobby" | "playing" | "gameover" = "connecting";
 let roundTimer: ReturnType<typeof setInterval> | null = null;
 let secondsLeft = 0;
@@ -222,7 +223,7 @@ function renderRound(roundMsg: any) {
     "",
     `  ${c.bold}${c.yellow}Prize Pool: $${state?.potDollars ?? "0.00"}${c.reset}`,
     "",
-    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Cost: ${c.red}$${roundMsg.costDollars}${c.reset}  ${c.dim}|${c.reset}  Session: ${c.green}$${sessionBal}${c.reset}`,
+    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Min bid: ${c.red}$${roundMsg.minBidDollars}${c.reset}  ${c.dim}|${c.reset}  Session: ${c.green}$${sessionBal}${c.reset}`,
     "",
   ];
 
@@ -230,12 +231,12 @@ function renderRound(roundMsg: any) {
     for (const p of state.players) {
       const isMe = p.wallet === wallet;
       const alive = p.alive;
-      const chosen = p.hasChosen;
+      const hasBid = p.hasBid;
       const status = !alive
         ? `${c.red}✗ eliminated${c.reset}`
-        : chosen
-          ? `${c.green}✓ locked in${c.reset}`
-          : `${c.dim}deciding...${c.reset}`;
+        : hasBid
+          ? `${c.green}✓ bid locked${c.reset}`
+          : `${c.dim}bidding...${c.reset}`;
       const nameStr = isMe ? `${c.cyan}${p.name}${c.reset}` : p.name;
       lines.push(`    ${alive ? c.green + "●" : c.red + "●"}${c.reset} ${nameStr}  ${status}`);
     }
@@ -248,10 +249,11 @@ function renderRound(roundMsg: any) {
   for (const line of lines) print(line);
 
   if (amAlive && paymentInProgress) {
-    print(`  ${c.yellow}⏳ Processing payment...${c.reset}`);
+    print(`  ${c.yellow}⏳ Processing bid payment...${c.reset}`);
     print("");
-  } else if (amAlive && waitingForChoice) {
-    print(`  ${c.bold}${c.white}  [S]${c.reset} Stay In ${c.dim}(-$${roundMsg.costDollars})${c.reset}    ${c.bold}${c.white}[F]${c.reset} Fold`);
+  } else if (amAlive && waitingForBid) {
+    print(`  ${c.bold}Enter bid amount ${c.dim}(min $${roundMsg.minBidDollars})${c.reset}${c.bold}: $${bidInput}▌${c.reset}`);
+    print(`  ${c.dim}Type amount, press [Enter] to confirm, [F] to fold${c.reset}`);
     print("");
   } else if (amAlive) {
     print(`  ${c.dim}Waiting for others...${c.reset}`);
@@ -271,17 +273,25 @@ function renderRoundResult(msg: any) {
     clearInterval(roundTimer);
     roundTimer = null;
   }
-  waitingForChoice = false;
+  waitingForBid = false;
   paymentInProgress = false;
+  bidInput = "";
 
   print("");
   print(`${c.dim}─────────────────────────────────────────────${c.reset}`);
   print(`  ${c.bold}Round ${msg.round} Results:${c.reset}`);
 
-  if (msg.stayers.length > 0) {
-    print(`    ${c.green}Stayed:${c.reset} ${msg.stayers.join(", ")} ${c.dim}(-$${msg.costDollars} each)${c.reset}`);
+  if (msg.bids && msg.bids.length > 0) {
+    for (const b of msg.bids) {
+      const isEliminated = msg.eliminated?.includes(b.name);
+      const marker = isEliminated ? `${c.red}✗${c.reset}` : `${c.green}✓${c.reset}`;
+      print(`    ${marker} ${b.name}: $${b.bidDollars}`);
+    }
   }
-  if (msg.folders.length > 0) {
+  if (msg.eliminated && msg.eliminated.length > 0) {
+    print(`    ${c.red}Eliminated (lowest bid):${c.reset} ${msg.eliminated.join(", ")}`);
+  }
+  if (msg.folders && msg.folders.length > 0) {
     print(`    ${c.red}Folded:${c.reset} ${msg.folders.join(", ")}`);
   }
   print(`    ${c.yellow}Pot: $${msg.potDollars}${c.reset}`);
@@ -378,8 +388,9 @@ function connect() {
       case "round_start":
         gamePhase = "playing";
         currentRoundMsg = msg;
-        waitingForChoice = msg.alivePlayers.includes(wallet);
+        waitingForBid = msg.alivePlayers.includes(wallet);
         paymentInProgress = false;
+        bidInput = "";
         secondsLeft = msg.timer;
 
         renderRound(msg);
@@ -448,27 +459,60 @@ process.stdin.on("data", (key) => {
     }
   }
 
-  if (gamePhase === "playing" && waitingForChoice && !paymentInProgress) {
+  if (gamePhase === "playing" && waitingForBid && !paymentInProgress) {
     const lower = k.toLowerCase();
-    if (lower === "s") {
-      waitingForChoice = false;
+
+    // F to fold
+    if (lower === "f") {
+      ws.send(JSON.stringify({ type: "fold" }));
+      waitingForBid = false;
+      bidInput = "";
+      if (currentRoundMsg) renderRound(currentRoundMsg);
+      return;
+    }
+
+    // Backspace
+    if (k === "\x7f" || k === "\b") {
+      bidInput = bidInput.slice(0, -1);
+      if (currentRoundMsg) renderRound(currentRoundMsg);
+      return;
+    }
+
+    // Digits and dot for typing bid amount
+    if (/^[0-9.]$/.test(k)) {
+      bidInput += k;
+      if (currentRoundMsg) renderRound(currentRoundMsg);
+      return;
+    }
+
+    // Enter to confirm bid
+    if (k === "\r" || k === "\n") {
+      const bidDollars = parseFloat(bidInput);
+      if (isNaN(bidDollars) || bidDollars <= 0) {
+        print(`  ${c.red}Enter a valid amount${c.reset}`);
+        return;
+      }
+
+      const minBidDollars = parseFloat(currentRoundMsg?.minBidDollars ?? "0.01");
+      if (bidDollars < minBidDollars) {
+        print(`  ${c.red}Minimum bid is $${currentRoundMsg?.minBidDollars}${c.reset}`);
+        return;
+      }
+
+      waitingForBid = false;
       paymentInProgress = true;
       if (currentRoundMsg) renderRound(currentRoundMsg);
 
-      const round = currentRoundMsg?.round ?? 1;
-      tempoRequest(`${SERVER}/api/session/stay?round=${round}`).then((result) => {
+      const bidCents = Math.round(bidDollars * 100);
+      tempoRequest(`${SERVER}/api/session/bid?amount=${bidDollars.toFixed(2)}`).then((result) => {
         paymentInProgress = false;
         if (result.success) {
-          ws.send(JSON.stringify({ type: "stay_confirmed", round }));
+          ws.send(JSON.stringify({ type: "bid_confirmed", bidCents }));
         } else {
           print(`  ${c.red}Payment failed — auto-folding${c.reset}`);
           ws.send(JSON.stringify({ type: "fold" }));
         }
       });
-    } else if (lower === "f") {
-      ws.send(JSON.stringify({ type: "fold" }));
-      waitingForChoice = false;
-      if (currentRoundMsg) renderRound(currentRoundMsg);
     }
   }
 

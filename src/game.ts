@@ -47,7 +47,7 @@ interface Player {
   name: string;
   ws: WebSocket;
   alive: boolean;
-  choice: "stay" | "fold" | null;
+  bid: number | null; // cents, null = hasn't bid yet, 0 = folded
   channelId: Hex | null;
   sessionReady: boolean;
 }
@@ -120,7 +120,7 @@ async function roomState(room: Room) {
       name: p.name,
       alive: p.alive,
       sessionReady: p.sessionReady,
-      hasChosen: p.choice !== null,
+      hasBid: p.bid !== null,
       sessionBalance: await getChannelBalance(p.channelId),
     }))
   );
@@ -132,7 +132,7 @@ async function roomState(room: Room) {
     pot: room.pot,
     potDollars: cents2dollars(room.pot),
     host: room.host,
-    nextCostDollars:
+    minBidDollars:
       room.state === "playing"
         ? roundCostDollars(room.round)
         : roundCostDollars(1),
@@ -142,16 +142,16 @@ async function roomState(room: Room) {
 
 // --- Game Logic ---
 function startRound(room: Room) {
-  const cost = roundCost(room.round);
+  const minBid = roundCost(room.round);
   const alive = room.players.filter((p) => p.alive);
 
-  for (const p of alive) p.choice = null;
+  for (const p of alive) p.bid = null;
 
   broadcast(room, {
     type: "round_start",
     round: room.round,
-    cost,
-    costDollars: roundCostDollars(room.round),
+    minBid,
+    minBidDollars: roundCostDollars(room.round),
     timer: ROUND_TIMER_MS / 1000,
     alivePlayers: alive.map((p) => p.wallet),
   });
@@ -159,15 +159,15 @@ function startRound(room: Room) {
 
   room.roundTimer = setTimeout(() => {
     for (const p of alive) {
-      if (p.choice === null) p.choice = "fold";
+      if (p.bid === null) p.bid = 0; // didn't bid = fold
     }
     resolveRound(room);
   }, ROUND_TIMER_MS);
 }
 
-function checkAllChosen(room: Room) {
+function checkAllBid(room: Room) {
   const alive = room.players.filter((p) => p.alive);
-  if (alive.every((p) => p.choice !== null)) {
+  if (alive.every((p) => p.bid !== null)) {
     if (room.roundTimer) {
       clearTimeout(room.roundTimer);
       room.roundTimer = null;
@@ -177,29 +177,60 @@ function checkAllChosen(room: Room) {
 }
 
 function resolveRound(room: Room) {
-  const cost = roundCost(room.round);
+  const minBid = roundCost(room.round);
   const alive = room.players.filter((p) => p.alive);
-  const stayers: Player[] = [];
-  const folders: Player[] = [];
 
+  // Separate bidders from folders (bid=0 means fold)
+  const bidders: Player[] = [];
+  const folders: Player[] = [];
   for (const p of alive) {
-    if (p.choice === "stay") {
-      room.pot += cost;
-      stayers.push(p);
+    if (p.bid && p.bid > 0) {
+      bidders.push(p);
     } else {
       folders.push(p);
     }
   }
 
-  for (const p of folders) p.alive = false;
+  // Find the lowest bid among bidders
+  let eliminated: Player[] = [];
+  let survivors: Player[] = [];
+
+  if (bidders.length > 1) {
+    const lowestBid = Math.min(...bidders.map((p) => p.bid!));
+    // Eliminate all players with the lowest bid (ties = all eliminated)
+    for (const p of bidders) {
+      if (p.bid === lowestBid && bidders.length > 1) {
+        eliminated.push(p);
+      } else {
+        survivors.push(p);
+      }
+    }
+    // If everyone bid the same amount, nobody is eliminated this round
+    if (eliminated.length === bidders.length) {
+      survivors = bidders;
+      eliminated = [];
+    }
+  } else {
+    survivors = bidders;
+  }
+
+  // All bids go into the pot
+  for (const p of bidders) {
+    room.pot += p.bid!;
+  }
+
+  // Mark eliminated and folders as dead
+  for (const p of [...folders, ...eliminated]) p.alive = false;
 
   broadcast(room, {
     type: "round_result",
     round: room.round,
-    cost,
-    costDollars: roundCostDollars(room.round),
-    stayers: stayers.map((p) => p.name),
+    minBid,
+    minBidDollars: roundCostDollars(room.round),
+    bids: bidders.map((p) => ({ name: p.name, bid: p.bid!, bidDollars: cents2dollars(p.bid!) })),
+    eliminated: eliminated.map((p) => p.name),
     folders: folders.map((p) => p.name),
+    survivors: survivors.map((p) => p.name),
     pot: room.pot,
     potDollars: cents2dollars(room.pot),
   });
@@ -233,7 +264,7 @@ function resolveRound(room: Room) {
       room.pot = 0;
       for (const p of room.players) {
         p.alive = true;
-        p.choice = null;
+        p.bid = null;
         p.sessionReady = false;
         p.channelId = null;
       }
@@ -291,7 +322,7 @@ function resolveRound(room: Room) {
       room.pot = 0;
       for (const p of room.players) {
         p.alive = true;
-        p.choice = null;
+        p.bid = null;
         p.sessionReady = false;
         p.channelId = null;
       }
@@ -500,17 +531,16 @@ app.get(
   }
 );
 
-// Session stay — player pays round cost via voucher
+// Session bid — player pays their chosen bid amount via voucher
 app.get(
-  "/api/session/stay",
+  "/api/session/bid",
   async (c, next) => {
-    const round = Number(c.req.query("round") ?? 1);
-    const cost = roundCostDollars(round);
-    const handler = mppx.session({ amount: cost, unitType: "round" });
+    const bid = c.req.query("amount") || "0.01";
+    const handler = mppx.session({ amount: bid, unitType: "bid" });
     return handler(c, next);
   },
   async (c) => {
-    const round = Number(c.req.query("round") ?? 1);
+    const bid = c.req.query("amount") || "0.01";
 
     // Push updated balance to CLI
     try {
@@ -526,7 +556,7 @@ app.get(
       }
     } catch {}
 
-    return c.json({ success: true, round, paid: roundCostDollars(round) });
+    return c.json({ success: true, paid: bid });
   }
 );
 
@@ -719,7 +749,7 @@ wss.on("connection", (ws) => {
             existing.ws = ws;
             existing.name = name;
             existing.alive = true;
-            existing.choice = null;
+            existing.bid = null;
           } else {
             existingLobby.players.push({
               wallet, name, ws, alive: true, choice: null,
@@ -829,30 +859,54 @@ wss.on("connection", (ws) => {
         myRoom.pot = 0;
         for (const p of myRoom.players) {
           p.alive = true;
-          p.choice = null;
+          p.bid = null;
         }
         startRound(myRoom);
         break;
       }
 
-      case "stay_confirmed": {
+      case "bid_confirmed": {
         if (!myRoom || !myWallet || myRoom.state !== "playing") return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
-        if (!me || !me.alive || me.choice !== null) return;
-        me.choice = "stay";
+        if (!me || !me.alive || me.bid !== null) return;
+
+        const bidCents = Number(msg.bidCents ?? 0);
+        const minBid = roundCost(myRoom.round);
+
+        if (bidCents < minBid) {
+          ws.send(JSON.stringify({
+            type: "error",
+            message: `Bid too low! Minimum is $${roundCostDollars(myRoom.round)}`,
+          }));
+          return;
+        }
+
+        // Check bid doesn't exceed session balance
+        const balance = await getChannelBalance(me.channelId);
+        if (balance !== null) {
+          const balanceCents = Math.round(parseFloat(balance) * 100);
+          if (bidCents > balanceCents) {
+            ws.send(JSON.stringify({
+              type: "error",
+              message: `You're betting $${cents2dollars(bidCents)} but only have $${balance} in your session! Deposit more first.`,
+            }));
+            return;
+          }
+        }
+
+        me.bid = bidCents;
         await broadcastState(myRoom);
-        checkAllChosen(myRoom);
+        checkAllBid(myRoom);
         break;
       }
-
 
       case "fold": {
         if (!myRoom || !myWallet || myRoom.state !== "playing") return;
         const me = myRoom.players.find((p) => p.wallet === myWallet);
-        if (!me || !me.alive || me.choice !== null) return;
-        me.choice = "fold";
+        if (!me || !me.alive || me.bid !== null) return;
+        me.bid = 0;
         await broadcastState(myRoom);
-        checkAllChosen(myRoom);
+        checkAllBid(myRoom);
         break;
       }
     }
@@ -864,10 +918,10 @@ wss.on("connection", (ws) => {
     if (!me) return;
 
     if (myRoom.state === "playing" && me.alive) {
-      me.choice = "fold";
+      me.bid = 0;
       me.alive = false;
       await broadcastState(myRoom);
-      checkAllChosen(myRoom);
+      checkAllBid(myRoom);
     } else if (myRoom.state === "lobby") {
       myRoom.players = myRoom.players.filter((p) => p.wallet !== myWallet);
       if (myRoom.players.length === 0) {
