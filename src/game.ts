@@ -390,29 +390,16 @@ function endGameSplit(room: Room, winners: Player[], message: string) {
     players: room.players.map((p) => ({ wallet: p.wallet, name: p.name })),
   });
 
-  settleGameSplit(room, winners).catch((err) => console.error("Settlement error:", err));
-
-  setTimeout(async () => {
-    room.state = "lobby";
-    room.round = 0;
-    room.pot = 0;
-    for (const p of room.players) {
-      p.alive = true;
-      p.lives = MAX_LIVES;
-      p.bid = null;
-      p.finalChoice = null;
-      p.sessionReady = false;
-      p.channelId = null;
-    }
-    await broadcastState(room);
-  }, 10000);
+  settleGameSplit(room, winners, room.pot).catch((err) => console.error("Settlement error:", err));
 }
 
-async function settleGameSplit(room: Room, winners: Player[]) {
+async function settleGameSplit(room: Room, winners: Player[], potSnapshot?: number) {
+  const pot = potSnapshot ?? room.pot;
   console.log(`Settling game (split) in room ${room.id}...`);
 
   if (!viemClient || !settleAccount) {
     console.error("  No SETTLE_PRIVATE_KEY");
+    resetRoom(room);
     return;
   }
 
@@ -441,7 +428,7 @@ async function settleGameSplit(room: Room, winners: Player[]) {
   }
 
   // Pay each winner their share
-  const share = Math.floor(room.pot / winners.length);
+  const share = Math.floor(pot / winners.length);
   const shareBaseUnits = BigInt(share) * 10000n;
 
   for (const w of winners) {
@@ -461,6 +448,24 @@ async function settleGameSplit(room: Room, winners: Player[]) {
       console.error(`  ✗ Failed to pay ${w.name}:`, err.message.slice(0, 100));
     }
   }
+
+  // Reset room to lobby
+  resetRoom(room);
+}
+
+async function resetRoom(room: Room) {
+  room.state = "lobby";
+  room.round = 0;
+  room.pot = 0;
+  for (const p of room.players) {
+    p.alive = true;
+    p.lives = MAX_LIVES;
+    p.bid = null;
+    p.finalChoice = null;
+    p.sessionReady = false;
+    p.channelId = null;
+  }
+  await broadcastState(room);
 }
 
 // --- End game + settle ---
@@ -477,29 +482,13 @@ function endGame(room: Room, winner: Player | null, message: string) {
     players: room.players.map((p) => ({ wallet: p.wallet, name: p.name })),
   });
 
-  settleGame(room, winner).catch((err) => console.error("Settlement error:", err));
-
-  // Reset room to lobby after 10s
-  setTimeout(async () => {
-    room.state = "lobby";
-    room.round = 0;
-    room.pot = 0;
-    for (const p of room.players) {
-      p.alive = true;
-      p.lives = MAX_LIVES;
-      p.bid = null;
-      p.finalChoice = null;
-      p.sessionReady = false;
-      p.channelId = null;
-    }
-    await broadcastState(room);
-  }, 10000);
+  settleGame(room, winner, room.pot).catch((err) => console.error("Settlement error:", err));
 }
 
 // --- Settlement ---
 // Uses the host's tempo CLI wallet (configured on this machine) for settlement.
 // The server operator IS the RECIPIENT, so `tempo request` signs with their key.
-async function settleGame(room: Room, winner: Player | null) {
+async function settleGame(room: Room, winner: Player | null, pot: number) {
   console.log(`Settling game in room ${room.id}...`);
 
   if (!viemClient || !settleAccount) {
@@ -511,6 +500,7 @@ async function settleGame(room: Room, winner: Player | null) {
         console.log(`  ${p.name}: deposit=$${formatUnits(state.deposit, DECIMALS)}, voucher=$${formatUnits(state.highestVoucherAmount, DECIMALS)}`);
       }
     }
+    resetRoom(room);
     return;
   }
 
@@ -560,10 +550,10 @@ async function settleGame(room: Room, winner: Player | null) {
 
   // 2. Pay winner (transfer USDC.e from RECIPIENT wallet to winner)
   let payoutTxHash: string | null = null;
-  if (winner && room.pot > 0) {
+  if (winner && pot > 0) {
     await new Promise((r) => setTimeout(r, 2000));
-    const potBaseUnits = BigInt(room.pot) * 10000n; // cents → 6-decimal base units
-    console.log(`  Paying ${winner.name} ($${cents2dollars(room.pot)})...`);
+    const potBaseUnits = BigInt(pot) * 10000n; // cents → 6-decimal base units
+    console.log(`  Paying ${winner.name} ($${cents2dollars(pot)})...`);
     try {
       payoutTxHash = await viemClient.writeContract({
         address: CURRENCY,
@@ -591,11 +581,12 @@ async function settleGame(room: Room, winner: Player | null) {
       txHash: payoutTxHash,
       winner: winner?.name,
       winnerWallet: winner?.wallet,
-      amount: cents2dollars(room.pot),
+      amount: cents2dollars(pot),
     });
   }
 
-  // Channels cleaned up above — players must open new session for next game
+  // Reset room to lobby
+  resetRoom(room);
 }
 
 // --- HTTP ---
@@ -1009,6 +1000,10 @@ wss.on("connection", (ws) => {
         if (!myRoom || !myWallet) return;
         if (myWallet !== ADMIN_WALLET) {
           ws.send(JSON.stringify({ type: "error", message: "Only the admin can start the game" }));
+          return;
+        }
+        if (!settleAccount) {
+          ws.send(JSON.stringify({ type: "error", message: "Server missing SETTLE_PRIVATE_KEY — cannot run games" }));
           return;
         }
         if (myRoom.players.length < MIN_PLAYERS) {
