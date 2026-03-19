@@ -443,6 +443,38 @@ app.get(
     } catch {}
 
     if (wallet && channelId) {
+      // If player already has a different channel, close the old one first
+      const oldChannelId = walletChannels.get(wallet);
+      if (oldChannelId && oldChannelId !== channelId && viemClient) {
+        console.log(`  Closing old channel ${oldChannelId.slice(0, 10)}... for ${shortAddr(wallet)}`);
+        try {
+          const oldState = await channelStore.getChannel(oldChannelId);
+          const voucherAmount = oldState?.highestVoucherAmount ?? 0n;
+          const voucher = oldState?.highestVoucher;
+          await viemClient.writeContract({
+            address: ESCROW,
+            abi: [{
+              name: "close", type: "function",
+              inputs: [
+                { name: "channelId", type: "bytes32" },
+                { name: "cumulativeAmount", type: "uint128" },
+                { name: "signature", type: "bytes" },
+              ],
+              outputs: [],
+              stateMutability: "nonpayable",
+            }],
+            functionName: "close",
+            args: [oldChannelId, voucherAmount, voucher?.signature ?? ("0x" as Hex)],
+            feeToken: CURRENCY,
+          } as any);
+          console.log(`  ✓ Old channel closed (settled $${formatUnits(voucherAmount, DECIMALS)})`);
+          channelWallets.delete(oldChannelId);
+        } catch (err: any) {
+          console.error(`  ✗ Failed to close old channel:`, err.message.slice(0, 100));
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
       walletChannels.set(wallet, channelId);
       channelWallets.set(channelId, wallet);
       channelHistory.push({ wallet, channelId, openedAt: new Date().toISOString() });
