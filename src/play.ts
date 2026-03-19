@@ -559,6 +559,9 @@ function connect() {
 process.stdin.on("data", (key) => {
   const k = key.toString();
 
+  // Ignore escape sequences (arrow keys, etc.)
+  if (k.startsWith("\x1b")) return;
+
   // Ctrl+C
   if (k === "\x03") {
     print(`\n  ${c.dim}Bye!${c.reset}\n`);
