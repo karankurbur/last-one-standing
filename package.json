@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "Escalating stakes game with real micropayments. Last player standing wins the pot.",
   "scripts": {
-    "dev": "npx tsx --env-file=.env --watch src/game.ts",
+    "dev": "npx tsx --env-file=.env --watch src/game.ts -- --dev",
     "game": "npx tsx --env-file=.env src/game.ts",
-    "play": "npx tsx src/play.ts"
+    "play": "npx tsx src/play.ts",
+    "reset": "rm -f ~/.tempo/wallet/channels.db ~/.tempo/wallet/payment_http___localhost_3000.lock && echo 'State reset.'",
+    "withdraw-all": "npx tsx --env-file=.env src/withdraw-all.ts"
   },
   "keywords": ["game", "crypto", "micropayments", "tempo", "cli"],
   "license": "ISC",

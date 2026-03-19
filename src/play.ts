@@ -1,32 +1,41 @@
 #!/usr/bin/env node
 import WebSocket from "ws";
 import * as readline from "readline";
+import { execSync, exec } from "child_process";
 
 // --- Parse args ---
 const args = process.argv.slice(2);
 let name: string | undefined;
-let server = "https://lenient-notably-mole.ngrok-free.app";
+let server = "http://localhost:3000";
+let depositAmount = "0.50";
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--server" || args[i] === "-s") {
     server = args[++i] ?? server;
+  } else if (args[i] === "--deposit" || args[i] === "-d") {
+    depositAmount = args[++i] ?? depositAmount;
   } else if (!args[i]!.startsWith("-")) {
     name = args[i];
   }
 }
 
-if (!name) {
-  console.log("");
-  console.log("  last-one-standing — Escalating stakes. One winner takes all.");
-  console.log("");
-  console.log("  Usage: npx last-one-standing <name> [--server <url>]");
-  console.log("");
-  console.log("  Examples:");
-  console.log("    npx last-one-standing Karan");
-  console.log("    npx last-one-standing Karan --server https://abc123.ngrok.io");
-  console.log("");
+// --- Get wallet address from tempo CLI ---
+let wallet: string;
+try {
+  const out = execSync("tempo wallet -j whoami", { encoding: "utf-8", timeout: 10_000 });
+  const info = JSON.parse(out);
+  if (!info.ready || !info.wallet) {
+    console.log("\n  Tempo wallet not ready. Run: tempo wallet login\n");
+    process.exit(1);
+  }
+  wallet = info.wallet.toLowerCase();
+} catch (e: any) {
+  console.log("\n  Could not read Tempo wallet. Make sure tempo CLI is installed.");
+  console.log("  Run: tempo wallet login\n");
   process.exit(1);
 }
+
+const displayName = name || wallet.slice(0, 6) + "…" + wallet.slice(-4);
 
 // --- Config ---
 const SERVER = server.replace(/\/$/, "");
@@ -52,11 +61,14 @@ const c = {
 
 // --- State ---
 let currentState: any = null;
-let myDepositCode = "";
 let waitingForChoice = false;
+let paymentInProgress = false;
 let gamePhase: "connecting" | "lobby" | "playing" | "gameover" = "connecting";
 let roundTimer: ReturnType<typeof setInterval> | null = null;
 let secondsLeft = 0;
+let sessionReady = false;
+let sessionOpening = false;
+let myChannelId: string | null = null;
 
 // --- Terminal ---
 const rl = readline.createInterface({
@@ -64,7 +76,6 @@ const rl = readline.createInterface({
   output: process.stdout,
 });
 
-// Enable raw mode for single keypress
 if (process.stdin.isTTY) {
   process.stdin.setRawMode(true);
 }
@@ -77,32 +88,47 @@ function print(s: string) {
   process.stdout.write(s + "\n");
 }
 
-function box(lines: string[], width = 50) {
-  const top = "╔" + "═".repeat(width) + "╗";
-  const bot = "╗" + "═".repeat(width) + "╝";
-  print(top);
-  for (const line of lines) {
-    // Strip ANSI for length calc
-    const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
-    const pad = width - stripped.length;
-    print("║ " + line + " ".repeat(Math.max(0, pad - 1)) + "║");
-  }
-  print("╚" + "═".repeat(width) + "╝");
+// --- tempo request helper ---
+function tempoRequest(url: string): Promise<{ success: boolean; output: string }> {
+  return new Promise((resolve) => {
+    exec(`tempo request "${url}"`, { timeout: 30_000 }, (error, stdout, stderr) => {
+      if (error) {
+        resolve({ success: false, output: stderr || error.message });
+      } else {
+        resolve({ success: true, output: stdout });
+      }
+    });
+  });
 }
 
-function centerPad(s: string, width: number) {
-  const stripped = s.replace(/\x1b\[[0-9;]*m/g, "");
-  const pad = Math.max(0, width - stripped.length);
-  const left = Math.floor(pad / 2);
-  return " ".repeat(left) + s;
+// --- Poll for session readiness ---
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function startSessionPolling() {
+  if (pollTimer || sessionReady) return;
+  pollTimer = setInterval(async () => {
+    if (sessionReady) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      return;
+    }
+    try {
+      const res = await fetch(`${SERVER}/api/session/status?wallet=${wallet}`);
+      const json = await res.json() as any;
+      if (json.ready && json.channelId) {
+        myChannelId = json.channelId;
+        sessionReady = true;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        ws.send(JSON.stringify({ type: "session_ready", channelId: myChannelId }));
+        renderLobby(currentState);
+      }
+    } catch {}
+  }, 2000);
 }
 
 // --- Render ---
 function renderLobby(state: any) {
+  if (!state) return;
   clear();
-  const me = state.players.find((p: any) => p.name === name);
-  myDepositCode = me?.depositCode ?? myDepositCode;
-  const balance = me?.balanceDollars ?? "0.00";
 
   const lines: string[] = [
     "",
@@ -111,47 +137,71 @@ function renderLobby(state: any) {
     "",
     `${c.dim}─────────────────────────────────────────────${c.reset}`,
     "",
-    `  ${c.bold}Your balance: ${c.green}$${balance}${c.reset}`,
+    `  ${c.bold}Wallet: ${c.cyan}${wallet}${c.reset}`,
     "",
-    `  ${c.bold}Players:${c.reset}`,
   ];
 
+  // Session status + balance
+  const me = state.players.find((p: any) => p.wallet === wallet);
+  const sessionBal = me?.sessionBalance;
+
+  if (sessionOpening) {
+    lines.push(`  ${c.yellow}⏳ Opening payment session...${c.reset}`);
+  } else if (sessionReady) {
+    lines.push(`  ${c.green}✓ Session active${c.reset} ${c.dim}(Channel: ${myChannelId?.slice(0, 10) ?? "?"}...)${c.reset}`);
+    if (sessionBal) lines.push(`  ${c.bold}Session balance: ${c.green}$${sessionBal}${c.reset}`);
+  } else {
+    lines.push(`  ${c.red}✗ No session${c.reset}`);
+    lines.push("");
+    lines.push(`  ${c.dim}Run in another terminal to deposit (default $0.10):${c.reset}`);
+    lines.push(`  ${c.green}tempo request "${SERVER}/api/session/open"${c.reset}`);
+    lines.push("");
+    lines.push(`  ${c.dim}Or specify deposit amount:${c.reset}`);
+    lines.push(`  ${c.green}tempo request "${SERVER}/api/session/open?deposit=1.00"${c.reset}`);
+    lines.push("");
+    lines.push(`  ${c.dim}Game will detect your deposit automatically.${c.reset}`);
+  }
+
+  lines.push("");
+  lines.push(`  ${c.bold}Players:${c.reset}`);
+
   for (const p of state.players) {
-    const isMe = p.name === name;
-    const isHost = p.name === state.host;
+    const isMe = p.wallet === wallet;
+    const isHost = p.wallet === state.host;
     const nameStr = isMe ? `${c.cyan}${p.name} (you)${c.reset}` : p.name;
     const hostBadge = isHost ? ` ${c.yellow}[HOST]${c.reset}` : "";
-    const bal = `${c.dim}$${p.balanceDollars}${c.reset}`;
-    lines.push(`    ${c.green}●${c.reset} ${nameStr}${hostBadge}  ${bal}`);
+    const ready = p.sessionReady ? `${c.green}✓${c.reset}` : `${c.dim}…${c.reset}`;
+    lines.push(`    ${ready} ${nameStr}${hostBadge}`);
   }
 
   lines.push("");
   lines.push(`${c.dim}─────────────────────────────────────────────${c.reset}`);
+  lines.push("");
 
-  if (me && me.balance === 0) {
-    lines.push("");
-    lines.push(`  ${c.red}No credits!${c.reset} Deposit by running:`);
-    lines.push("");
-    lines.push(`  ${c.green}tempo request "${SERVER}/api/deposit/${myDepositCode}"${c.reset}`);
-    lines.push("");
-  } else {
-    lines.push("");
-    lines.push(`  ${c.dim}Add more credits:${c.reset}`);
-    lines.push(`  ${c.green}tempo request "${SERVER}/api/deposit/${myDepositCode}"${c.reset}`);
-    lines.push("");
-  }
-
-  const isHost = state.host === name;
+  const isHost = state.host === wallet;
   if (isHost) {
     if (state.players.length < 2) {
       lines.push(`  ${c.dim}Waiting for more players...${c.reset}`);
     } else {
-      lines.push(`  ${c.bgGreen}${c.bold} Press [ENTER] to start the game ${c.reset}`);
+      const allReady = state.players.every((p: any) => p.sessionReady);
+      if (allReady) {
+        lines.push(`  ${c.bgGreen}${c.bold} Press [ENTER] to start the game ${c.reset}`);
+      } else {
+        lines.push(`  ${c.dim}Waiting for all players to open sessions...${c.reset}`);
+      }
     }
   } else {
-    lines.push(`  ${c.dim}Waiting for ${state.host} to start...${c.reset}`);
+    const hostPlayer = state.players.find((p: any) => p.wallet === state.host);
+    const hostName = hostPlayer?.name ?? "host";
+    lines.push(`  ${c.dim}Waiting for ${hostName} to start...${c.reset}`);
   }
 
+  lines.push("");
+  if (sessionReady) {
+    lines.push(`  ${c.dim}[T] Top-up  [W] Withdraw deposit  [Ctrl+C] Quit${c.reset}`);
+  } else {
+    lines.push(`  ${c.dim}[Ctrl+C] Quit${c.reset}`);
+  }
   lines.push("");
 
   for (const line of lines) print(line);
@@ -160,9 +210,9 @@ function renderLobby(state: any) {
 function renderRound(roundMsg: any) {
   clear();
   const state = currentState;
-  const me = state?.players.find((p: any) => p.name === name);
-  const balance = me?.balanceDollars ?? "0.00";
-  const amAlive = roundMsg.alivePlayers.includes(name);
+  const amAlive = roundMsg.alivePlayers.includes(wallet);
+  const me = state?.players.find((p: any) => p.wallet === wallet);
+  const sessionBal = me?.sessionBalance ?? "?";
 
   const lines: string[] = [
     "",
@@ -172,14 +222,13 @@ function renderRound(roundMsg: any) {
     "",
     `  ${c.bold}${c.yellow}Prize Pool: $${state?.potDollars ?? "0.00"}${c.reset}`,
     "",
-    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Cost: ${c.red}$${roundMsg.costDollars}${c.reset}  ${c.dim}|${c.reset}  Balance: ${c.green}$${balance}${c.reset}`,
+    `  ${c.bold}Round ${roundMsg.round}${c.reset}  ${c.dim}|${c.reset}  Cost: ${c.red}$${roundMsg.costDollars}${c.reset}  ${c.dim}|${c.reset}  Session: ${c.green}$${sessionBal}${c.reset}`,
     "",
   ];
 
-  // Player list
   if (state) {
     for (const p of state.players) {
-      const isMe = p.name === name;
+      const isMe = p.wallet === wallet;
       const alive = p.alive;
       const chosen = p.hasChosen;
       const status = !alive
@@ -198,7 +247,10 @@ function renderRound(roundMsg: any) {
 
   for (const line of lines) print(line);
 
-  if (amAlive && waitingForChoice) {
+  if (amAlive && paymentInProgress) {
+    print(`  ${c.yellow}⏳ Processing payment...${c.reset}`);
+    print("");
+  } else if (amAlive && waitingForChoice) {
     print(`  ${c.bold}${c.white}  [S]${c.reset} Stay In ${c.dim}(-$${roundMsg.costDollars})${c.reset}    ${c.bold}${c.white}[F]${c.reset} Fold`);
     print("");
   } else if (amAlive) {
@@ -211,7 +263,6 @@ function renderRound(roundMsg: any) {
 }
 
 function renderTimer() {
-  // Move cursor to timer position and update
   process.stdout.write(`\x1b[s\x1b[1;45H${c.bold}${secondsLeft <= 5 ? c.red : c.white}${secondsLeft}s${c.reset} \x1b[u`);
 }
 
@@ -221,6 +272,7 @@ function renderRoundResult(msg: any) {
     roundTimer = null;
   }
   waitingForChoice = false;
+  paymentInProgress = false;
 
   print("");
   print(`${c.dim}─────────────────────────────────────────────${c.reset}`);
@@ -242,6 +294,7 @@ function renderGameOver(msg: any) {
     roundTimer = null;
   }
   waitingForChoice = false;
+  paymentInProgress = false;
   gamePhase = "gameover";
 
   clear();
@@ -254,7 +307,7 @@ function renderGameOver(msg: any) {
   ];
 
   if (msg.winner) {
-    const isMe = msg.winner === name;
+    const isMe = msg.winnerWallet === wallet;
     if (isMe) {
       lines.push(`  ${c.bold}${c.green}  YOU WIN!  ${c.reset}`);
     } else {
@@ -274,18 +327,23 @@ function renderGameOver(msg: any) {
   lines.push("");
 
   for (const p of msg.players) {
-    const isMe = p.name === name;
+    const isMe = p.wallet === wallet;
     const isWinner = p.name === msg.winner;
     const nameStr = isMe ? `${c.cyan}${p.name}${c.reset}` : p.name;
     const crown = isWinner ? ` ${c.yellow}👑${c.reset}` : "";
-    lines.push(`    ${nameStr}${crown}  ${c.green}$${p.balanceDollars}${c.reset}`);
+    lines.push(`    ${nameStr}${crown}`);
   }
 
   lines.push("");
+  lines.push(`  ${c.dim}Settling on-chain...${c.reset}`);
   lines.push(`  ${c.dim}Returning to lobby...${c.reset}`);
   lines.push("");
 
   for (const line of lines) print(line);
+
+  // Channel closed after game — need new session next game
+  sessionReady = false;
+  myChannelId = null;
 }
 
 // --- WebSocket ---
@@ -296,7 +354,7 @@ function connect() {
   ws = new WebSocket(WS_URL);
 
   ws.on("open", () => {
-    ws.send(JSON.stringify({ type: "create_room", player: name }));
+    ws.send(JSON.stringify({ type: "create_room", wallet, player: name || undefined }));
   });
 
   ws.on("message", (raw) => {
@@ -310,6 +368,7 @@ function connect() {
         currentState = msg;
         if (msg.state === "lobby") {
           gamePhase = "lobby";
+          if (!sessionReady) startSessionPolling();
           renderLobby(msg);
         } else if (msg.state === "playing" && currentRoundMsg) {
           renderRound(currentRoundMsg);
@@ -319,7 +378,8 @@ function connect() {
       case "round_start":
         gamePhase = "playing";
         currentRoundMsg = msg;
-        waitingForChoice = msg.alivePlayers.includes(name);
+        waitingForChoice = msg.alivePlayers.includes(wallet);
+        paymentInProgress = false;
         secondsLeft = msg.timer;
 
         renderRound(msg);
@@ -340,6 +400,15 @@ function connect() {
 
       case "game_over":
         renderGameOver(msg);
+        break;
+
+      case "payout":
+        print(`\n  ${c.green}${c.bold}💰 Payout: $${msg.amount} → ${msg.winner}${c.reset}`);
+        print(`  ${c.dim}tx: ${msg.txHash}${c.reset}\n`);
+        break;
+
+      case "player_withdrew":
+        print(`\n  ${c.yellow}${msg.message}${c.reset}\n`);
         break;
 
       case "error":
@@ -373,23 +442,73 @@ process.stdin.on("data", (key) => {
   if (gamePhase === "lobby") {
     // Enter to start game (host only)
     if (k === "\r" || k === "\n") {
-      if (currentState?.host === name && currentState?.players.length >= 2) {
+      if (currentState?.host === wallet && currentState?.players.length >= 1) {
         ws.send(JSON.stringify({ type: "start_game" }));
       }
     }
+    // T to top-up
+    if (k.toLowerCase() === "t" && sessionReady) {
+      print(`\n  ${c.yellow}⏳ Topping up...${c.reset}`);
+      tempoRequest(`${SERVER}/api/session/topup`).then((result) => {
+        if (result.success) {
+          print(`  ${c.green}✓ Top-up successful${c.reset}\n`);
+        } else {
+          print(`  ${c.red}Top-up failed: ${result.output.trim()}${c.reset}\n`);
+        }
+      });
+    }
   }
 
-  if (gamePhase === "playing" && waitingForChoice) {
+  if (gamePhase === "playing" && waitingForChoice && !paymentInProgress) {
     const lower = k.toLowerCase();
     if (lower === "s") {
-      ws.send(JSON.stringify({ type: "stay" }));
       waitingForChoice = false;
+      paymentInProgress = true;
       if (currentRoundMsg) renderRound(currentRoundMsg);
+
+      const round = currentRoundMsg?.round ?? 1;
+      tempoRequest(`${SERVER}/api/session/stay?round=${round}`).then((result) => {
+        paymentInProgress = false;
+        if (result.success) {
+          ws.send(JSON.stringify({ type: "stay_confirmed", round }));
+        } else {
+          print(`  ${c.red}Payment failed — auto-folding${c.reset}`);
+          ws.send(JSON.stringify({ type: "fold" }));
+        }
+      });
     } else if (lower === "f") {
       ws.send(JSON.stringify({ type: "fold" }));
       waitingForChoice = false;
       if (currentRoundMsg) renderRound(currentRoundMsg);
     }
+  }
+
+  // W to withdraw deposit (lobby only)
+  if (k.toLowerCase() === "w" && sessionReady && gamePhase === "lobby") {
+    print(`\n  ${c.yellow}⏳ Withdrawing deposit...${c.reset}`);
+    fetch(`${SERVER}/api/session/withdraw?wallet=${wallet}`)
+      .then((res) => res.json())
+      .then((json: any) => {
+        if (json.success) {
+          sessionReady = false;
+          myChannelId = null;
+          print(`  ${c.green}✓ Channel closed. $${json.returned} returned to your wallet.${c.reset}`);
+          print(`  ${c.dim}tx: ${json.txHash}${c.reset}\n`);
+        } else {
+          print(`  ${c.red}${json.error}${c.reset}\n`);
+        }
+        renderLobby(currentState);
+      })
+      .catch(() => print(`  ${c.red}Failed to reach server.${c.reset}\n`));
+  }
+
+  // T to top-up during game
+  if (gamePhase === "playing" && k.toLowerCase() === "t") {
+    tempoRequest(`${SERVER}/api/session/topup`).then((result) => {
+      if (result.success) {
+        print(`  ${c.green}✓ Top-up successful${c.reset}`);
+      }
+    });
   }
 });
 
@@ -397,7 +516,10 @@ process.stdin.on("data", (key) => {
 clear();
 print("");
 print(`  ${c.bold}${c.yellow}LAST ONE STANDING${c.reset}`);
-print(`  ${c.dim}Connecting as ${c.cyan}${name}${c.dim} to ${SERVER}...${c.reset}`);
+print(`  ${c.dim}Wallet: ${c.cyan}${wallet}${c.reset}`);
+if (name) print(`  ${c.dim}Name: ${c.cyan}${name}${c.reset}`);
+print(`  ${c.dim}Deposit: ${c.cyan}$${depositAmount}${c.reset}`);
+print(`  ${c.dim}Connecting to ${SERVER}...${c.reset}`);
 print("");
 
 connect();
