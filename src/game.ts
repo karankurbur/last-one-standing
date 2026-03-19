@@ -418,11 +418,33 @@ const mppx = Mppx.create({
 app.get(
   "/api/session/open",
   async (c, next) => {
-    const deposit = c.req.query("deposit") || SUGGESTED_DEPOSIT;
+    let requestedDeposit = c.req.query("deposit") || SUGGESTED_DEPOSIT;
+
+    // If player already has a channel, increment: new deposit = requested + old remaining
+    let wallet: string | null = null;
+    try {
+      const credential = Credential.fromRequest(c.req.raw);
+      if (credential.source) wallet = extractWallet(credential.source);
+    } catch {}
+
+    if (wallet) {
+      const oldChannelId = walletChannels.get(wallet);
+      if (oldChannelId) {
+        const oldState = await channelStore.getChannel(oldChannelId);
+        if (oldState) {
+          const remaining = oldState.deposit - oldState.highestVoucherAmount;
+          const remainingDollars = Number(remaining) / 1e6;
+          const requestedDollars = parseFloat(requestedDeposit);
+          const totalDollars = requestedDollars + remainingDollars;
+          requestedDeposit = totalDollars.toFixed(2);
+        }
+      }
+    }
+
     const handler = mppx.session({
       amount: "0",
       unitType: "round",
-      suggestedDeposit: deposit,
+      suggestedDeposit: requestedDeposit,
     });
     return handler(c, next);
   },
@@ -478,7 +500,11 @@ app.get(
       walletChannels.set(wallet, channelId);
       channelWallets.set(channelId, wallet);
       channelHistory.push({ wallet, channelId, openedAt: new Date().toISOString() });
-      console.log(`Session opened: ${shortAddr(wallet)} → ${channelId.slice(0, 10)}...`);
+
+      // Log with deposit amount
+      const newState = await channelStore.getChannel(channelId);
+      const depositStr = newState ? `$${formatUnits(newState.deposit, DECIMALS)}` : "?";
+      console.log(`Session opened: ${shortAddr(wallet)} → ${channelId.slice(0, 10)}... (deposit: ${depositStr})`);
 
       // Push state update to CLI
       for (const room of rooms.values()) {
