@@ -6,7 +6,7 @@ import { execSync, exec } from "child_process";
 // --- Parse args ---
 const args = process.argv.slice(2);
 let name: string | undefined;
-let server = "http://localhost:3000";
+let server = "https://lenient-notably-mole.ngrok-free.app";
 let depositAmount = "0.50";
 
 for (let i = 0; i < args.length; i++) {
