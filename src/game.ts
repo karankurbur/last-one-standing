@@ -464,6 +464,43 @@ app.get(
   }
 );
 
+// Fund — add more to an existing channel
+// Charges the requested amount, which forces tempo request to auto-top-up
+// if the channel doesn't have enough deposit. The charge is immediately
+// "refunded" by not actually deducting from the channel server-side.
+app.get(
+  "/api/session/fund",
+  async (c, next) => {
+    const amount = c.req.query("amount") || "0.10";
+    const handler = mppx.session({ amount, unitType: "fund", suggestedDeposit: amount });
+    return handler(c, next);
+  },
+  async (c) => {
+    let wallet: string | null = null;
+    let channelId: Hex | null = null;
+    try {
+      const credential = Credential.fromRequest(c.req.raw);
+      if (credential.source) wallet = extractWallet(credential.source);
+      const payload = credential.payload as any;
+      if (payload?.channelId) channelId = payload.channelId as Hex;
+    } catch {}
+
+    // Push updated balance to CLI
+    if (wallet) {
+      for (const room of rooms.values()) {
+        if (room.players.some((p) => p.wallet === wallet)) {
+          await broadcastState(room);
+          break;
+        }
+      }
+    }
+
+    const state = channelId ? await channelStore.getChannel(channelId) : null;
+    const deposit = state ? formatUnits(state.deposit, DECIMALS) : null;
+    return c.json({ success: true, channelId, wallet, deposit });
+  }
+);
+
 // Session stay — player pays round cost via voucher
 app.get(
   "/api/session/stay",

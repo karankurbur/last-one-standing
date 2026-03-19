@@ -198,8 +198,8 @@ function renderLobby(state: any) {
 
   lines.push("");
   if (sessionReady) {
+    lines.push(`  ${c.dim}Add funds:${c.reset} ${c.green}tempo request "${SERVER}/api/session/fund?amount=0.10"${c.reset}`);
     lines.push(`  ${c.dim}[W] Withdraw deposit  [Ctrl+C] Quit${c.reset}`);
-    lines.push(`  ${c.dim}Auto top-up: channel refills from your wallet when low${c.reset}`);
   } else {
     lines.push(`  ${c.dim}[Ctrl+C] Quit${c.reset}`);
   }
