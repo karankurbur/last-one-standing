@@ -418,33 +418,11 @@ const mppx = Mppx.create({
 app.get(
   "/api/session/open",
   async (c, next) => {
-    let requestedDeposit = c.req.query("deposit") || SUGGESTED_DEPOSIT;
-
-    // If player already has a channel, increment: new deposit = requested + old remaining
-    let wallet: string | null = null;
-    try {
-      const credential = Credential.fromRequest(c.req.raw);
-      if (credential.source) wallet = extractWallet(credential.source);
-    } catch {}
-
-    if (wallet) {
-      const oldChannelId = walletChannels.get(wallet);
-      if (oldChannelId) {
-        const oldState = await channelStore.getChannel(oldChannelId);
-        if (oldState) {
-          const remaining = oldState.deposit - oldState.highestVoucherAmount;
-          const remainingDollars = Number(remaining) / 1e6;
-          const requestedDollars = parseFloat(requestedDeposit);
-          const totalDollars = requestedDollars + remainingDollars;
-          requestedDeposit = totalDollars.toFixed(2);
-        }
-      }
-    }
-
+    const deposit = c.req.query("deposit") || SUGGESTED_DEPOSIT;
     const handler = mppx.session({
       amount: "0",
       unitType: "round",
-      suggestedDeposit: requestedDeposit,
+      suggestedDeposit: deposit,
     });
     return handler(c, next);
   },
