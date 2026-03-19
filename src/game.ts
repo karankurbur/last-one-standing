@@ -33,7 +33,7 @@ const channelStore = Session.ChannelStore.fromStore(store);
 const SETTLE_KEY = process.env.SETTLE_PRIVATE_KEY;
 const settleAccount = SETTLE_KEY ? privateKeyToAccount(SETTLE_KEY as `0x${string}`) : null;
 const viemClient = settleAccount
-  ? createWalletClient({ account: settleAccount, chain: tempoChain, transport: http("https://rpc.tempo.xyz") })
+  ? createWalletClient({ account: settleAccount, chain: tempoChain, transport: http(process.env.RPC_URL || "https://rpc.tempo.xyz") })
   : null;
 
 // wallet → channelId (active)
