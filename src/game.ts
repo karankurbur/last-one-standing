@@ -877,7 +877,21 @@ const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
 // --- WebSocket ---
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws) => {
+// --- Heartbeat: ping all clients every 25s to prevent idle disconnects (ngrok, proxies, etc.) ---
+const HEARTBEAT_INTERVAL = 25_000;
+const CLIENT_TIMEOUT = 60_000;
+
+setInterval(() => {
+  wss.clients.forEach((ws: any) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL);
+
+wss.on("connection", (ws: any) => {
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
   let myWallet: string | null = null;
   let myRoom: Room | null = null;
 

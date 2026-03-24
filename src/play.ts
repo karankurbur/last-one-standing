@@ -543,9 +543,14 @@ function connect() {
     }
   });
 
+  ws.on("ping", () => { ws.pong(); });
+
   ws.on("close", () => {
-    print(`\n  ${c.red}Disconnected from server.${c.reset}`);
-    process.exit(0);
+    print(`\n  ${c.yellow}Disconnected from server. Reconnecting in 3s...${c.reset}`);
+    setTimeout(() => {
+      gamePhase = "connecting";
+      connect();
+    }, 3000);
   });
 
   ws.on("error", (err) => {
